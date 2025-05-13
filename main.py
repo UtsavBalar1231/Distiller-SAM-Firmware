@@ -1,3 +1,8 @@
+#Author: PamirAI 
+#Date: 2025-05-05
+#Version: 0.1.0
+#Description: This is the main program for the RP2040 SAM
+
 import machine
 import utime
 from eink_driver_sam import einkDSP_SAM
@@ -17,6 +22,7 @@ pmic_enable.init(mode=machine.Pin.IN)
 
 PRODUCTION = True  #for production flash, set to true for usb debug
 UART_DEBUG = False #for UART debug, set to true for UART debug
+LUT_MODE = True #for LUT mode, set to true for LUT mode
 
 #Instruction Set
 EncodeTable = {"BTN_UP": 0b00000001, "BTN_DOWN": 0b00000010, "BTN_SELECT": 0b00000100, "SHUT_DOWN": 0b00001000}
@@ -172,13 +178,22 @@ def core1_task():
         einkRunning = True
         if eink.init == False:
             eink.re_init()
-        eink.epd_init_fast()
+        
+        if LUT_MODE:
+            eink.epd_init_lut()
+        else:
+            eink.epd_init_fast()
+            
         try:
             eink.PIC_display(None, './loading1.bin')
         except OSError:
             print("Loading files not found")
             einkRunning = False
-            
+        
+        if LUT_MODE:
+            utime.sleep_ms(1300) # give time for first refresh, no lower than 1300
+      
+        
         repeat = 0
         while True:
             with eink_lock:
