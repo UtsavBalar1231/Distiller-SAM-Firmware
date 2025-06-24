@@ -17,7 +17,7 @@ import json
 pmic_enable = machine.Pin(3, machine.Pin.IN, pull=None)
 # END OF PMIC RESET BLOCK
 
-PRODUCTION = False  #for production flash, set to true for usb debug
+PRODUCTION = True  #for production flash, set to true for usb debug
 UART_DEBUG = False #for UART debug, set to true for UART debug
 
 #Instruction Set

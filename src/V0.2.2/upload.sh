@@ -87,7 +87,7 @@ elif [ "$1" == "--first" ]; then
 fi
 
 # Define the files and commands
-files=("bin/loading1.bin" "bin/loading2.bin" "eink_driver_sam.py" )
+files=("bin/loading1.bin" "bin/loading2.bin" "eink_driver_sam.py" "main.py")
 port="/dev/tty.usb*"
 
 # Total number of files

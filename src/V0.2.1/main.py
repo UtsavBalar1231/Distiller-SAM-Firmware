@@ -53,7 +53,6 @@ if PRODUCTION:
 uart0 = machine.UART(0, baudrate=115200, tx=machine.Pin(0), rx=machine.Pin(1))
 einkMux.low()  # EINK OFF
 einkStatus.low()  # SOM CONTROL E-INK
-eink = einkDSP_SAM()
 
 print("Starting...")
 
@@ -171,6 +170,9 @@ neopixel_running = True
 
 einkStatus.high() # provide power to eink
 einkMux.high() # SAM CONTROL E-INK
+
+eink = einkDSP_SAM()
+
 debug_print("StartScreen\n")
 
 # Shared flag to coordinate thread handoff
