@@ -12,7 +12,7 @@ import math
 import neopixel
 import json
 
-
+utime.sleep_ms(100)
 # Reset PMIC, DO NO REMOVE THIS BLOCK
 pmic_enable = machine.Pin(3, machine.Pin.IN, pull=None)
 # END OF PMIC RESET BLOCK
