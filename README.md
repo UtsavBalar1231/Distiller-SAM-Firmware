@@ -57,12 +57,12 @@ cd Distiller-SAM-Firmware
 
 ### Script Uploader
 
-The project includes a script uploader (`scriptloarder.sh`) to simplify the firmware deployment process. This script automates uploading the firmware to the RP2040 device.
+The project includes a script uploader (`scriptloarder.sh`) to simplify the firmware deployment process. This script automates uploading the firmware to the RP2040 device and supports multiple firmware versions.
 
 #### Prerequisites
 
-- macOS environment (the script uses macOS-specific paths)
-- Homebrew installed
+- Linux/macOS environment
+- Python 3 with pip
 - The `ampy` utility for uploading files to MicroPython devices
 
 #### Installation
@@ -79,28 +79,61 @@ chmod +x scriptloarder.sh
 
 #### Usage
 
-The script uploader supports several modes:
+The script uploader supports several modes and firmware version selection:
 
-1. **Basic Upload** - Upload the firmware files to the RP2040:
+1. **Basic Upload** - Upload the latest firmware files to the RP2040:
 ```bash
 ./scriptloarder.sh
 ```
 
-2. **First Time Flash** - Flash the MicroPython firmware to a new RP2040:
+2. **Specific Version Upload** - Upload a specific firmware version:
+```bash
+./scriptloarder.sh --version V0.2.2
+```
+
+3. **First Time Flash** - Flash the MicroPython firmware to a new RP2040:
 ```bash
 ./scriptloarder.sh --first
 ```
 
-3. **Wipe and Flash** - Wipe the RP2040 and flash a new firmware:
+4. **Wipe and Flash** - Wipe the RP2040 and flash a new firmware:
 ```bash
 ./scriptloarder.sh --wipe
 ```
 
+5. **Dry Run** - Check device status without making changes:
+```bash
+./scriptloarder.sh --dry-run
+```
+
+6. **Verbose Mode** - Enable detailed output:
+```bash
+./scriptloarder.sh --verbose
+```
+
+#### Available Options
+
+- `--version <version>` - Specify firmware version (e.g., V0.2.2, V0.1.2)
+- `--first` - Flash MicroPython firmware only
+- `--wipe` - Wipe device and flash MicroPython
+- `--dry-run` - Check device status without making changes
+- `--verbose` - Enable verbose output
+- `-h, --help` - Show help message
+
+#### Firmware Version Selection
+
+The script automatically detects available firmware versions in the `src/` directory. If no version is specified, it defaults to the latest available version. Available versions include:
+- `V0.1.2` - Early firmware version
+- `V0.2.0` - Intermediate firmware version
+- `V0.2.1` - Updated firmware version
+- `V0.2.2` - Latest firmware version
+- `DistillerOne` - Specialized firmware variant
+
 The script will:
-1. Wait for the RP2040 device to be detected
-2. Copy the necessary firmware files
-3. Upload the application files (`main.py`, `eink_driver_sam.py`, and binary files)
-4. Show a progress bar during the upload process
+1. Detect the RP2040 device (in bootloader mode for .uf2 files, or normal mode for .py files)
+2. Select the appropriate firmware files from the specified version directory
+3. Upload the application files (`main.py`, `eink_driver_sam.py`, and binary files from `bin/`)
+4. Show progress and status information
 
 ### Hardware Requirements
 
@@ -121,15 +154,28 @@ The system has configurable parameters in the main scripts:
 
 ## Files Structure
 
-- `main.py` - Primary firmware for the RP2040
-- `eink_driver_sam.py` - E-ink display driver
-- `battery.py` - Battery management system interface
-- `cm4/` - SAM module firmware
-- `ULP/` - MicroPython firmware files
-- `Fan/` - Fan control components
-- `tools/` - Development and debugging utilities
-- `scriptloarder.sh` - Script to automate firmware deployment
-- `Bin/` - Binary files for the e-ink display
+```
+distiller-sam-firmware/
+├── src/                          # Firmware versions
+│   ├── V0.1.2/                   # Version 0.1.2 firmware
+│   │   ├── main.py
+│   │   ├── eink_driver_sam.py
+│   │   ├── bin/                  # Binary files for e-ink display
+│   │   │   ├── loading1.bin
+│   │   │   ├── loading2.bin
+│   │   │   └── white.bin
+│   │   └── upload.sh
+│   ├── V0.2.0/                   # Version 0.2.0 firmware
+│   ├── V0.2.1/                   # Version 0.2.1 firmware
+│   ├── V0.2.2/                   # Latest firmware version
+│   └── DistillerOne/             # Specialized firmware variant
+├── ULP/                          # MicroPython firmware files
+│   ├── RPI_PICO-20240222-v1.22.2.uf2
+│   └── flash_nuke.uf2
+├── Tools/                        # Development and debugging utilities
+├── Asset/                        # Assets and resources
+└── scriptloarder.sh              # Automated firmware deployment script
+```
 
 ## License
 
