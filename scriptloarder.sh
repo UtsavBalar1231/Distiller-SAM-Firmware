@@ -86,21 +86,88 @@ fi
 install_ampy() {
 	if ! command -v ampy >/dev/null 2>&1; then
 		echo "Installing ampy for MicroPython file upload..."
-		if command -v pip3 >/dev/null 2>&1; then
-			pip3 install adafruit-ampy
-		elif command -v pip >/dev/null 2>&1; then
-			pip install adafruit-ampy
+		local os=$(detect_os)
+
+		# Try different pip commands based on OS
+		if [[ "$os" == "Linux" ]]; then
+			# On Linux, try pip3 first, then pip, then python3 -m pip
+			if command -v pip3 >/dev/null 2>&1; then
+				pip3 install --user adafruit-ampy
+			elif command -v pip >/dev/null 2>&1; then
+				pip install --user adafruit-ampy
+			elif command -v python3 >/dev/null 2>&1; then
+				python3 -m pip install --user adafruit-ampy
+			else
+				echo "ERROR: pip not found. Please install Python and pip first."
+				echo "On Ubuntu/Debian: sudo apt install python3-pip"
+				echo "On Fedora/CentOS: sudo dnf install python3-pip"
+				echo "On Arch: sudo pacman -S python-pip"
+				exit 1
+			fi
 		else
-			echo "ERROR: pip not found. Please install Python and pip first."
-			exit 1
+			# macOS or other
+			if command -v pip3 >/dev/null 2>&1; then
+				pip3 install adafruit-ampy
+			elif command -v pip >/dev/null 2>&1; then
+				pip install adafruit-ampy
+			else
+				echo "ERROR: pip not found. Please install Python and pip first."
+				exit 1
+			fi
 		fi
 	fi
 }
 
+# Detect operating system
+detect_os() {
+	case "$(uname -s)" in
+	Linux*)
+		echo "Linux"
+		;;
+	Darwin*)
+		echo "macOS"
+		;;
+	*)
+		echo "Unknown"
+		;;
+	esac
+}
+
 # Find RPI-RP2 drive (bootloader mode)
 find_rp2_drive() {
-	# Check common mount points first
-	for mount_point in /media/$USER/RPI-RP2 /mnt/RPI-RP2 /Volumes/RPI-RP2; do
+	local os=$(detect_os)
+
+	# Define search paths based on OS
+	local search_paths=()
+	if [[ "$os" == "macOS" ]]; then
+		search_paths=(
+			"/Volumes/RPI-RP2"
+			"/Volumes"
+		)
+	elif [[ "$os" == "Linux" ]]; then
+		search_paths=(
+			"/media/$USER/RPI-RP2"
+			"/mnt/RPI-RP2"
+			"/run/media/$USER/RPI-RP2"
+			"/media"
+			"/mnt"
+			"/run/media/$USER"
+			"/run/mount"
+		)
+	else
+		# Generic fallback
+		search_paths=(
+			"/media/$USER/RPI-RP2"
+			"/mnt/RPI-RP2"
+			"/Volumes/RPI-RP2"
+			"/media"
+			"/mnt"
+			"/Volumes"
+		)
+	fi
+
+	# Check direct mount points first
+	for mount_point in "${search_paths[@]:0:3}"; do
 		if [[ -d "$mount_point" && -w "$mount_point" ]]; then
 			echo "$mount_point"
 			return 0
@@ -108,15 +175,7 @@ find_rp2_drive() {
 	done
 
 	# Search all possible mount locations
-	local search_paths=(
-		"/media"
-		"/mnt"
-		"/run/media/$USER"
-		"/run/mount"
-		"/Volumes"
-	)
-
-	for base_path in "${search_paths[@]}"; do
+	for base_path in "${search_paths[@]:3}"; do
 		if [[ -d "$base_path" ]]; then
 			# Look for RPI-RP2 directory
 			local rp2_path=$(find "$base_path" -name "RPI-RP2" -type d 2>/dev/null | head -1)
@@ -146,12 +205,27 @@ find_rp2_drive() {
 
 # Find MicroPython device
 find_micropython_device() {
+	local os=$(detect_os)
+
+	# Define device patterns based on OS
+	local device_patterns=()
+	if [[ "$os" == "macOS" ]]; then
+		device_patterns=("/dev/tty.usb*" "/dev/tty.usbmodem*" "/dev/tty.SLAB_USBtoUART*")
+	elif [[ "$os" == "Linux" ]]; then
+		device_patterns=("/dev/ttyACM*" "/dev/ttyUSB*")
+	else
+		# Generic fallback
+		device_patterns=("/dev/ttyACM*" "/dev/ttyUSB*" "/dev/tty.usb*")
+	fi
+
 	# Try common serial devices
-	for device in /dev/ttyACM* /dev/ttyUSB*; do
-		if [[ -e "$device" ]]; then
-			echo "$device"
-			return 0
-		fi
+	for pattern in "${device_patterns[@]}"; do
+		for device in $pattern; do
+			if [[ -e "$device" ]]; then
+				echo "$device"
+				return 0
+			fi
+		done
 	done
 	echo ""
 }
@@ -173,7 +247,16 @@ check_device_access() {
 		if [[ -n "$device_group" ]]; then
 			echo "Or add user to $device_group group: sudo usermod -a -G $device_group $USER"
 		else
-			echo "Or add user to serial group: sudo usermod -a -G dialout $USER  # or uucp on Arch"
+			local os=$(detect_os)
+			if [[ "$os" == "Linux" ]]; then
+				echo "Or add user to serial group:"
+				echo "  Ubuntu/Debian: sudo usermod -a -G dialout $USER"
+				echo "  Arch Linux: sudo usermod -a -G uucp $USER"
+				echo "  Fedora/CentOS: sudo usermod -a -G dialout $USER"
+				echo "Then logout and login again for changes to take effect."
+			elif [[ "$os" == "macOS" ]]; then
+				echo "On macOS, you may need to install drivers for your USB-to-serial adapter."
+			fi
 		fi
 		return 1
 	fi
@@ -206,6 +289,84 @@ except Exception:
 " 2>/dev/null
 
 	return $?
+}
+
+# Wait for device to appear in bootloader mode
+wait_for_bootloader() {
+	local timeout=${1:-30}
+	local count=0
+
+	echo "Waiting for device to appear in bootloader mode..."
+	while [[ $count -lt $timeout ]]; do
+		local rp2_drive=$(find_rp2_drive)
+		if [[ -n "$rp2_drive" ]]; then
+			echo "✓ Device found in bootloader mode at: $rp2_drive"
+			return 0
+		fi
+		sleep 1
+		((count++))
+		if [[ $((count % 5)) -eq 0 ]]; then
+			echo "Still waiting... ($count/$timeout seconds)"
+		fi
+	done
+
+	echo "✗ Timeout waiting for bootloader mode"
+	return 1
+}
+
+# Wait for device to appear as MicroPython serial device
+wait_for_micropython() {
+	local timeout=${1:-30}
+	local count=0
+
+	echo "Waiting for MicroPython device to appear..."
+	while [[ $count -lt $timeout ]]; do
+		local device=$(find_micropython_device)
+		if [[ -n "$device" ]]; then
+			# Wait a bit more for device to stabilize
+			sleep 2
+			if check_device_access "$device" && test_micropython_connection "$device"; then
+				echo "✓ MicroPython device ready at: $device"
+				return 0
+			fi
+		fi
+		sleep 1
+		((count++))
+		if [[ $((count % 5)) -eq 0 ]]; then
+			echo "Still waiting... ($count/$timeout seconds)"
+		fi
+	done
+
+	echo "✗ Timeout waiting for MicroPython device"
+	return 1
+}
+
+# Validate device requirements for current mode
+validate_device_requirements() {
+	if [[ "$FIRST_TIME_FLASH" == true || "$WIPE_AND_FLASH" == true ]]; then
+		# These modes need bootloader mode
+		local rp2_drive=$(find_rp2_drive)
+		if [[ -z "$rp2_drive" ]]; then
+			echo "ERROR: Device must be in bootloader mode for this operation"
+			echo "Hold BOOTSEL button while connecting device"
+			return 1
+		fi
+	else
+		# Default mode needs MicroPython device
+		local device=$(find_micropython_device)
+		if [[ -z "$device" ]]; then
+			echo "ERROR: MicroPython device not found for file upload"
+			echo "Device must be running MicroPython firmware"
+			echo "Try: $0 --first (to flash MicroPython firmware)"
+			return 1
+		fi
+
+		if ! check_device_access "$device"; then
+			echo "ERROR: Cannot access MicroPython device"
+			return 1
+		fi
+	fi
+	return 0
 }
 
 # Check device status for dry-run
@@ -358,20 +519,7 @@ get_files() {
 	if [[ "$FIRST_TIME_FLASH" == true ]]; then
 		echo "ULP/RPI_PICO-20240222-v1.22.2.uf2"
 	elif [[ "$WIPE_AND_FLASH" == true ]]; then
-		echo "ULP/flash_nuke.uf2 ULP/RPI_PICO-20240222-v1.22.2.uf2"
-		if [[ -n "$FIRMWARE_VERSION" ]]; then
-			verdir="src/$FIRMWARE_VERSION"
-		else
-			verdir="src/$(get_latest_firmware_version)"
-		fi
-		# Add .py and .bin files from selected version
-		if [[ -d "$verdir" ]]; then
-			for f in "$verdir"/eink_driver_sam.py "$verdir"/main.py "$verdir"/bin/*.bin; do
-				[[ -f "$f" ]] && echo "$f"
-			done
-		else
-			echo "WARNING: Firmware version directory $verdir not found"
-		fi
+		echo "ULP/flash_nuke.uf2"
 	else
 		if [[ -n "$FIRMWARE_VERSION" ]]; then
 			verdir="src/$FIRMWARE_VERSION"
@@ -388,6 +536,96 @@ get_files() {
 	fi
 }
 
+# Handle wipe and flash sequence
+handle_wipe_sequence() {
+	echo "=== WIPE AND FLASH SEQUENCE ==="
+
+	# Step 1: Validate device is in bootloader mode
+	if ! validate_device_requirements; then
+		return 1
+	fi
+
+	# Step 2: Flash nuke firmware
+	echo ""
+	echo "Step 1/3: Wiping device firmware..."
+	if ! flash_uf2 "ULP/flash_nuke.uf2"; then
+		echo "ERROR: Failed to wipe device"
+		return 1
+	fi
+
+	# Step 3: Wait for device to reboot into bootloader mode
+	echo ""
+	echo "Step 2/3: Waiting for device to reboot..."
+	if ! wait_for_bootloader 30; then
+		echo "ERROR: Device did not reboot into bootloader mode"
+		echo "Try disconnecting and reconnecting with BOOTSEL pressed"
+		return 1
+	fi
+
+	# Step 4: Flash MicroPython firmware
+	echo ""
+	echo "Step 3/3: Installing MicroPython firmware..."
+	if ! flash_uf2 "ULP/RPI_PICO-20240222-v1.22.2.uf2"; then
+		echo "ERROR: Failed to flash MicroPython firmware"
+		return 1
+	fi
+
+	# Step 5: Wait for MicroPython to be ready
+	echo ""
+	echo "Waiting for MicroPython to be ready..."
+	if ! wait_for_micropython 30; then
+		echo "ERROR: MicroPython device not ready"
+		echo "You may need to run '$0 --first' to flash MicroPython again"
+		return 1
+	fi
+
+	# Step 6: Upload firmware files
+	echo ""
+	echo "Uploading firmware files..."
+
+	# Determine firmware version
+	local verdir
+	if [[ -n "$FIRMWARE_VERSION" ]]; then
+		verdir="src/$FIRMWARE_VERSION"
+	else
+		verdir="src/$(get_latest_firmware_version)"
+	fi
+
+	if [[ ! -d "$verdir" ]]; then
+		echo "ERROR: Firmware version directory $verdir not found"
+		return 1
+	fi
+
+	# Install ampy for file upload
+	install_ampy
+
+	# Upload files
+	local upload_success=0
+	local upload_total=0
+
+	for file in "$verdir"/eink_driver_sam.py "$verdir"/main.py "$verdir"/bin/*.bin; do
+		if [[ -f "$file" ]]; then
+			((upload_total++))
+			echo ""
+			if upload_python "$file"; then
+				((upload_success++))
+			fi
+		fi
+	done
+
+	echo ""
+	echo "=== WIPE AND FLASH COMPLETE ==="
+	echo "Files uploaded: $upload_success/$upload_total"
+
+	if [[ $upload_success -eq $upload_total ]]; then
+		echo "SUCCESS: Device wiped and firmware installed successfully"
+		return 0
+	else
+		echo "WARNING: Some files failed to upload"
+		return 1
+	fi
+}
+
 # Main execution
 main() {
 	# Show mode
@@ -395,8 +633,16 @@ main() {
 		echo "MODE: First time flash - Installing MicroPython firmware"
 	elif [[ "$WIPE_AND_FLASH" == true ]]; then
 		echo "MODE: Wipe and flash - Complete device reset"
+		# Handle wipe sequence specially
+		handle_wipe_sequence
+		exit $?
 	else
 		echo "MODE: Basic upload - Uploading files"
+	fi
+
+	# Validate device requirements
+	if ! validate_device_requirements; then
+		exit 1
 	fi
 
 	# Firmware version selection
@@ -447,11 +693,6 @@ main() {
 		*.uf2)
 			if flash_uf2 "$file"; then
 				((success_count++))
-				# Special delay for wipe mode
-				if [[ "$WIPE_AND_FLASH" == true && "$file" == *"flash_nuke"* ]]; then
-					echo "Waiting for device wipe to complete..."
-					sleep 5
-				fi
 			fi
 			;;
 		*.py)
@@ -486,7 +727,15 @@ main() {
 		echo "- Run '$0 --dry-run' to check device status"
 		echo "- For .py files: Make sure device is running MicroPython"
 		echo "- For .uf2 files: Hold BOOTSEL while connecting device"
-		echo "- Check permissions: sudo usermod -a -G uucp $USER (then logout/login)  # or dialout on Ubuntu/Debian"
+		local os=$(detect_os)
+		if [[ "$os" == "Linux" ]]; then
+			echo "- Check permissions:"
+			echo "  Ubuntu/Debian: sudo usermod -a -G dialout $USER"
+			echo "  Arch Linux: sudo usermod -a -G uucp $USER"
+			echo "  Then logout and login again"
+		elif [[ "$os" == "macOS" ]]; then
+			echo "- Check USB drivers are installed for your device"
+		fi
 	fi
 }
 
