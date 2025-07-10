@@ -5,7 +5,7 @@ import os
 # E-ink display specifications
 EPD_WIDTH = 128
 EPD_HEIGHT = 250
-ROTATION_180 = True  # Set to match your main.py rotation setting
+ROTATION_180 = False  # Set to match your main.py rotation setting
 
 def dump_1bit_eink(pixels: np.ndarray, width: int, height: int, rotation_180: bool = True):
     """
@@ -132,8 +132,8 @@ except Exception as e:
 
 # Process loading2.bin (Image B)
 print("\n=== Processing loading2.bin ===")
-image_path_b = "/Users/chengmingzhang/CodingProjects/Software/Distiller-SAM-Firmware/Asset/Loading-B-2-1-inch.png"
-output_path_b = '/Users/chengmingzhang/CodingProjects/Software/Distiller-SAM-Firmware/src/V0.2.2/bin/loading2.bin'
+image_path_b = "/Users/chengmingzhang/CodingProjects/Software/Distiller-SAM-Firmware/Asset/Loading-A-2-1-inch.png"
+output_path_b = '/Users/chengmingzhang/CodingProjects/Software/Distiller-SAM-Firmware/src/V0.2.2/bin/loading1-180.bin'
 
 try:
     if os.path.exists(image_path_b):

@@ -12,10 +12,16 @@ import math
 import neopixel
 import json
 
-utime.sleep_ms(100)
-# Reset PMIC, DO NO REMOVE THIS BLOCK
+# PD_BYPASS = True
+
+# if PD_BYPASS:
+#     pmic_enable = machine.Pin(3, machine.Pin.OUT)
+#     pmic_enable.value(0) #拉低引脚
+#     utime.sleep(0.01)#保持低电平 0.01 秒
+#     pmic_enable.init(mode=machine.Pin.IN, pull=None)
+# else:
+# utime.sleep_ms(100)
 pmic_enable = machine.Pin(3, machine.Pin.IN, pull=None)
-# END OF PMIC RESET BLOCK
 
 PRODUCTION = True  #for production flash, set to true for usb debug
 UART_DEBUG = False #for UART debug, set to true for UART debug
