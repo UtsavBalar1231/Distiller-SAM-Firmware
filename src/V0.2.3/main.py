@@ -9,10 +9,9 @@ from eink_driver_sam import einkDSP_SAM
 import _thread
 from machine import WDT
 import math
-import neopixel
-import json
 from pamir_uart_protocols import PamirUartProtocols
 from neopixel_controller import NeoPixelController
+from power_manager import PowerManager
 
 pmic_enable = machine.Pin(3, machine.Pin.IN, pull=None)
 
@@ -22,8 +21,6 @@ UART_DEBUG = False #for UART debug, set to true for UART debug
 # Initialize protocol handler
 protocol = PamirUartProtocols()
 
-#Legacy Instruction Set (kept for shutdown functionality)
-EncodeTable = {"BTN_UP": 0b00000001, "BTN_DOWN": 0b00000010, "BTN_SELECT": 0b00000100, "SHUT_DOWN": 0b00001000}
 USB_SWITCH_TABLE = {"SAM_USB": [0,0], "SOM_USB": [1,0]} # S, OE_N
 # usb_switch_oe_n = machine.Pin(19, machine.Pin.OUT, value = 0)
 usb_switch_s = machine.Pin(23, machine.Pin.OUT, value = 0)
@@ -64,35 +61,18 @@ def debug_print(message):
         uart0.write(message)
     print(message)
 
-# Legacy neopixel functions (kept for backward compatibility)
-def init_neopixel(pin=20, num_leds=1, brightness=1.0):
-    """Legacy function - use NeoPixelController instead"""
-    np = neopixel.NeoPixel(machine.Pin(pin), num_leds)
-    np.brightness = min(max(brightness, 0.0), 1.0)
-    return np
-
-def set_color(np, color, brightness=None, index=None):
-    """Legacy function - use NeoPixelController instead"""
-    if brightness is not None:
-        np.brightness = min(max(brightness, 0.0), 1.0)
-    r = int(color[0] * np.brightness)
-    g = int(color[1] * np.brightness)
-    b = int(color[2] * np.brightness)
-    if index is None:
-        for i in range(len(np)):
-            np[i] = (r, g, b)
-    else:
-        np[index] = (r, g, b)
-    np.write()
 
 # Add lock for shared variable
 eink_lock = _thread.allocate_lock()
 einkRunning = False
 uart_lock = _thread.allocate_lock()  # Add lock for UART handling
 
-# Inter-core communication queue for LED commands
+# Inter-core communication queues
 led_command_queue = []
 led_queue_lock = _thread.allocate_lock()
+
+power_command_queue = []
+power_queue_lock = _thread.allocate_lock()
 
 # LED completion callback function
 def led_completion_callback(led_id, sequence_length):
@@ -121,6 +101,9 @@ def led_completion_callback(led_id, sequence_length):
 np_controller = NeoPixelController(pin=20, num_leds=1, default_brightness=0.5, 
                                    completion_callback=led_completion_callback)
 
+# Initialize power manager with BQ27441 (3000mAh design capacity)
+power_manager = PowerManager(design_capacity_mah=3000, debug_enabled=not PRODUCTION)
+
 def add_led_command_to_queue(command):
     """Thread-safe function to add LED command to inter-core queue"""
     global led_command_queue
@@ -133,6 +116,20 @@ def get_led_commands_from_queue():
     with led_queue_lock:
         commands = led_command_queue.copy()
         led_command_queue.clear()
+        return commands
+
+def add_power_command_to_queue(command):
+    """Thread-safe function to add power command to inter-core queue"""
+    global power_command_queue
+    with power_queue_lock:
+        power_command_queue.append(command)
+
+def get_power_commands_from_queue():
+    """Thread-safe function to get all power commands from queue"""
+    global power_command_queue
+    with power_queue_lock:
+        commands = power_command_queue.copy()
+        power_command_queue.clear()
         return commands
 
 def process_uart_packet(packet_bytes):
@@ -159,51 +156,28 @@ def process_uart_packet(packet_bytes):
                 })
                 if not PRODUCTION:
                     print(f"LED status request: {ack_data}")
+    
+    elif packet_type == protocol.TYPE_POWER:
+        # Parse power packet (SoM → RP2040 commands)
+        valid, power_data = protocol.parse_power_packet(packet_bytes)
+        if valid:
+            # Add to power command queue for core 0 to process
+            add_power_command_to_queue(power_data)
+            if not PRODUCTION:
+                print(f"Power command queued: {power_data}")
+        else:
+            if not PRODUCTION:
+                print(f"Invalid power packet: {[hex(b) for b in packet_bytes]}")
+    
     elif packet_type == protocol.TYPE_BUTTON:
         # Handle button packets if needed (currently only send, not receive)
         pass
-    # Add other packet types as needed
+    
+    else:
+        if not PRODUCTION:
+            print(f"Unknown packet type: 0x{packet_type:02X}")
 
-def handle_neopixel_sequence(np, data):
-    """Legacy function - now uses NeoPixelController for better performance"""
-    global np_controller
-    
-    if not isinstance(data, dict) or 'colors' not in data:
-        debug_print("[RP2040 DEBUG] Invalid data format or missing 'colors' key\n")
-        return
-    
-    debug_print(f"[RP2040 DEBUG] Processing legacy neopixel sequence\n")
-    
-    # Use the new controller to handle legacy sequences
-    np_controller.handle_legacy_sequence(data)
 
-def test_led_protocol():
-    """Test function to verify LED protocol implementation"""
-    global protocol, np_controller
-    
-    print("Testing LED protocol implementation...")
-    
-    # Test 1: Create LED command packet
-    test_packet = protocol.create_led_packet(
-        led_id=0, execute=False, r4=15, g4=0, b4=0, time_value=3
-    )
-    print(f"Test packet: {[hex(b) for b in test_packet]}")
-    
-    # Test 2: Parse the packet
-    valid, led_data = protocol.parse_led_packet(test_packet)
-    if valid:
-        print(f"Parsed LED data: {led_data}")
-    
-    # Test 3: Create completion acknowledgment
-    ack_packet = protocol.create_led_completion_packet(0, 5)
-    print(f"ACK packet: {[hex(b) for b in ack_packet]}")
-    
-    # Test 4: Parse acknowledgment
-    valid_ack, ack_data = protocol.parse_led_acknowledgment(ack_packet)
-    if valid_ack:
-        print(f"Parsed ACK data: {ack_data}")
-    
-    print("LED protocol test completed!")
 
 
 # Function to debounce button press
@@ -254,9 +228,7 @@ upBTN.irq(trigger=machine.Pin.IRQ_RISING | machine.Pin.IRQ_FALLING, handler=butt
 downBTN.irq(trigger=machine.Pin.IRQ_RISING | machine.Pin.IRQ_FALLING, handler=button_handler)
 sam_interrupt.irq(trigger=machine.Pin.IRQ_RISING, handler=loading_terminator)
 
-# Legacy neopixel for backward compatibility (if needed)
-np = init_neopixel(pin=20, num_leds=1, brightness=0.5)
-debug_print(f"[RP2040 DEBUG] Initialized NeoPixel Controller and legacy support\n")
+debug_print(f"[RP2040 DEBUG] Initialized NeoPixel Controller\n")
 
 einkStatus.high() # provide power to eink
 einkMux.high() # SAM CONTROL E-INK
@@ -265,6 +237,23 @@ einkMux.high() # SAM CONTROL E-INK
 eink = einkDSP_SAM()
 
 debug_print("StartScreen\n")
+
+# Send boot notification to SoM (Raspberry Pi 5)
+def send_boot_notification():
+    """Send boot notification FROM RP2040 TO SoM to indicate RP2040 is running"""
+    try:
+        with uart_lock:
+            # Send power status packet indicating we're running
+            packet = protocol.create_power_status_packet_rp2040_to_som(
+                protocol.POWER_STATE_RUNNING, 0x00)
+            uart0.write(packet)
+            if not PRODUCTION:
+                print("[Boot] Boot notification sent to SoM")
+    except Exception as e:
+        print(f"[Boot] Failed to send boot notification: {e}")
+
+# Send boot notification now that UART is initialized
+send_boot_notification()
 
 # Shared flag to coordinate thread handoff
 thread_handoff_complete = False
@@ -441,14 +430,99 @@ while True:
                 except:
                     pass  # Don't let error reporting crash the system
         
-        # Existing button handling code
+        # Process power commands from queue (Core 0)
+        power_commands = get_power_commands_from_queue()
+        for command in power_commands:
+            try:
+                cmd_type = command.get('command', 'unknown')
+                
+                if cmd_type == 'query':
+                    # SoM → RP2040: Query power status
+                    current_state = power_manager.get_power_state()
+                    with uart_lock:
+                        packet = protocol.create_power_status_packet_rp2040_to_som(current_state, 0x00)
+                        uart0.write(packet)
+                        if not PRODUCTION:
+                            print(f"Power status response sent: state=0x{current_state:02X}")
+                
+                elif cmd_type == 'set_state':
+                    # SoM → RP2040: Set power state
+                    new_state = command.get('power_state', power_manager.current_power_state)
+                    power_manager.set_power_state(new_state)
+                    # Send acknowledgment
+                    with uart_lock:
+                        packet = protocol.create_power_status_packet_rp2040_to_som(new_state, 0x00)
+                        uart0.write(packet)
+                        if not PRODUCTION:
+                            print(f"Power state set to: 0x{new_state:02X}")
+                
+                elif cmd_type == 'sleep':
+                    # SoM → RP2040: Enter sleep mode
+                    delay_seconds = command.get('delay_seconds', 0)
+                    sleep_flags = command.get('sleep_flags', 0)
+                    power_manager.handle_sleep_command(delay_seconds, sleep_flags)
+                
+                elif cmd_type == 'shutdown':
+                    # SoM → RP2040: Prepare for shutdown
+                    shutdown_mode = command.get('shutdown_mode', 0)
+                    reason_code = command.get('reason_code', 0)
+                    power_manager.handle_shutdown_command(shutdown_mode, reason_code)
+                    
+                    # Send shutdown acknowledgment
+                    with uart_lock:
+                        packet = protocol.create_power_status_packet_rp2040_to_som(
+                            protocol.POWER_STATE_OFF, shutdown_mode)
+                        uart0.write(packet)
+                        if not PRODUCTION:
+                            print(f"Shutdown ACK sent: mode={shutdown_mode}")
+                
+                elif cmd_type == 'request_metrics':
+                    # SoM → RP2040: Send all sensor metrics
+                    metrics = power_manager.get_all_metrics()
+                    
+                    with uart_lock:
+                        # Send current measurement
+                        current_packet = protocol.create_power_metrics_packet_rp2040_to_som(
+                            protocol.POWER_CMD_CURRENT, metrics['current_ma'])
+                        uart0.write(current_packet)
+                        
+                        # Send battery percentage
+                        battery_packet = protocol.create_power_metrics_packet_rp2040_to_som(
+                            protocol.POWER_CMD_BATTERY, metrics['battery_percent'])
+                        uart0.write(battery_packet)
+                        
+                        # Send temperature
+                        temp_packet = protocol.create_power_metrics_packet_rp2040_to_som(
+                            protocol.POWER_CMD_TEMP, metrics['temperature_0_1c'])
+                        uart0.write(temp_packet)
+                        
+                        # Send voltage
+                        voltage_packet = protocol.create_power_metrics_packet_rp2040_to_som(
+                            protocol.POWER_CMD_VOLTAGE, metrics['voltage_mv'])
+                        uart0.write(voltage_packet)
+                        
+                        if not PRODUCTION:
+                            print(f"Metrics sent: {metrics}")
+                
+                else:
+                    if not PRODUCTION:
+                        print(f"Unknown power command: {cmd_type}")
+                        
+            except Exception as e:
+                print(f"Error processing power command: {e}")
+        
+        # Special button combination handling (UP + SELECT for 10 seconds = USB switch)
         if debounce(upBTN) and selectBTN.value() == 1:
             start_time = utime.ticks_ms()
             while utime.ticks_diff(utime.ticks_ms(), start_time) < 10000:
                 if upBTN.value() == 0 or selectBTN.value() == 0:
                     break
                 if utime.ticks_diff(utime.ticks_ms(), start_time) >= 2000:
-                    uart0.write(f"{EncodeTable['SHUT_DOWN']}\n")
+                    # Send shutdown packet using new protocol
+                    with uart_lock:
+                        packet = protocol.create_power_status_packet_rp2040_to_som(
+                            protocol.POWER_STATE_OFF, 0x00)
+                        uart0.write(packet)
                 wdt.feed()
                 utime.sleep_ms(10)
             if utime.ticks_diff(utime.ticks_ms(), start_time) >= 10000:

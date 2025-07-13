@@ -37,6 +37,23 @@ class PamirUartProtocols:
     # Special LED IDs
     LED_ALL = 0x0F          # Broadcast to all LEDs (ID 15)
     
+    # Power command constants
+    POWER_CMD_QUERY = 0x00          # Query current power status
+    POWER_CMD_SET = 0x10            # Set power state  
+    POWER_CMD_SLEEP = 0x20          # Enter sleep mode
+    POWER_CMD_SHUTDOWN = 0x30       # Shutdown system
+    POWER_CMD_CURRENT = 0x40        # Current draw reporting
+    POWER_CMD_BATTERY = 0x50        # Battery state reporting
+    POWER_CMD_TEMP = 0x60           # Temperature reporting
+    POWER_CMD_VOLTAGE = 0x70        # Voltage reporting
+    POWER_CMD_REQUEST_METRICS = 0x80 # Request all metrics
+    
+    # Power states
+    POWER_STATE_OFF = 0x00          # System off
+    POWER_STATE_RUNNING = 0x01      # System running
+    POWER_STATE_SUSPEND = 0x02      # System suspended
+    POWER_STATE_SLEEP = 0x03        # Low power sleep
+    
     def __init__(self):
         pass
     
@@ -304,6 +321,161 @@ class PamirUartProtocols:
             }
         
         return True, ack_data
+    
+    # ==================== POWER MANAGEMENT PROTOCOL ====================
+    
+    def create_power_packet_som_to_rp2040(self, command, data0=0x00, data1=0x00):
+        """Create power command packet FROM SoM (Raspberry Pi 5) TO RP2040
+        
+        Commands sent by SoM to control RP2040 power management:
+        - POWER_CMD_QUERY (0x00): Query current power status
+        - POWER_CMD_SET (0x10): Set power state (running/sleep/suspend)
+        - POWER_CMD_SLEEP (0x20): Enter sleep mode with optional delay
+        - POWER_CMD_SHUTDOWN (0x30): Prepare for system shutdown
+        - POWER_CMD_REQUEST_METRICS (0x80): Request all sensor metrics
+        
+        Args:
+            command: Power command type (see POWER_CMD_* constants)
+            data0: First data byte (command-specific)
+            data1: Second data byte (command-specific)
+            
+        Returns:
+            bytes: 4-byte packet ready for UART transmission
+        """
+        # Start with TYPE_POWER (0b010xxxxx) + command in 5 LSB
+        type_flags = self.TYPE_POWER | (command & 0x1F)
+        return self.create_packet(type_flags, data0, data1)
+    
+    def create_power_metrics_packet_rp2040_to_som(self, metric_type, value_16bit):
+        """Create power metrics packet FROM RP2040 TO SoM (Raspberry Pi 5)
+        
+        Metrics sent by RP2040 to report sensor data to SoM:
+        - POWER_CMD_CURRENT (0x40): Current draw in mA
+        - POWER_CMD_BATTERY (0x50): Battery percentage (0-100%)  
+        - POWER_CMD_TEMP (0x60): Temperature in 0.1°C resolution
+        - POWER_CMD_VOLTAGE (0x70): Voltage in mV
+        
+        Args:
+            metric_type: Metric type (POWER_CMD_CURRENT/BATTERY/TEMP/VOLTAGE)
+            value_16bit: 16-bit sensor value (little-endian format)
+            
+        Returns:
+            bytes: 4-byte packet ready for UART transmission
+        """
+        # Start with TYPE_POWER + metric type
+        type_flags = self.TYPE_POWER | (metric_type & 0x1F)
+        
+        # Pack 16-bit value as little-endian (low byte first)
+        data0 = value_16bit & 0xFF          # Low byte
+        data1 = (value_16bit >> 8) & 0xFF   # High byte
+        
+        return self.create_packet(type_flags, data0, data1)
+    
+    def create_power_status_packet_rp2040_to_som(self, power_state, status_flags=0x00):
+        """Create power status packet FROM RP2040 TO SoM (Raspberry Pi 5)
+        
+        Status responses sent by RP2040 in response to SoM queries:
+        - Boot notification: RP2040 has started and is running
+        - Shutdown acknowledgment: RP2040 is ready for power-off
+        - Power state changes: Current operating mode
+        
+        Args:
+            power_state: Current power state (POWER_STATE_* constants)
+            status_flags: Optional status flags
+            
+        Returns:
+            bytes: 4-byte packet ready for UART transmission
+        """
+        type_flags = self.TYPE_POWER | self.POWER_CMD_QUERY
+        return self.create_packet(type_flags, power_state, status_flags)
+    
+    def parse_power_packet(self, packet_bytes):
+        """Parse power packet and return power command data
+        
+        Handles both SoM→RP2040 commands and RP2040→SoM responses
+        
+        Args:
+            packet_bytes: 4-byte packet from UART
+            
+        Returns:
+            tuple: (valid, power_data) where power_data contains command info
+        """
+        valid, parsed = self.validate_packet(packet_bytes)
+        if not valid:
+            return False, None
+        
+        type_flags, data0, data1, checksum = parsed
+        
+        # Check if this is a power packet
+        if (type_flags & 0xE0) != self.TYPE_POWER:
+            return False, None
+        
+        # Extract power command from 5 LSB
+        command = type_flags & 0x1F
+        
+        # Parse based on command type
+        if command == self.POWER_CMD_QUERY:
+            # Status query or response
+            power_data = {
+                'command': 'query',
+                'power_state': data0,
+                'status_flags': data1
+            }
+        elif command == self.POWER_CMD_SET:
+            # Set power state command (SoM → RP2040)
+            power_data = {
+                'command': 'set_state',
+                'power_state': data0,
+                'flags': data1
+            }
+        elif command == self.POWER_CMD_SLEEP:
+            # Enter sleep mode command (SoM → RP2040)
+            power_data = {
+                'command': 'sleep',
+                'delay_seconds': data0,
+                'sleep_flags': data1
+            }
+        elif command == self.POWER_CMD_SHUTDOWN:
+            # Shutdown command (SoM → RP2040)
+            power_data = {
+                'command': 'shutdown',
+                'shutdown_mode': data0,  # 0=normal, 1=emergency, 2=reboot
+                'reason_code': data1
+            }
+        elif command == self.POWER_CMD_REQUEST_METRICS:
+            # Metrics request (SoM → RP2040)
+            power_data = {
+                'command': 'request_metrics',
+                'metric_mask': data0,    # Which metrics to send (0=all)
+                'reserved': data1
+            }
+        elif command in [self.POWER_CMD_CURRENT, self.POWER_CMD_BATTERY, 
+                        self.POWER_CMD_TEMP, self.POWER_CMD_VOLTAGE]:
+            # Metrics response (RP2040 → SoM)
+            value_16bit = data0 | (data1 << 8)  # Little-endian reconstruction
+            
+            metric_names = {
+                self.POWER_CMD_CURRENT: 'current_ma',
+                self.POWER_CMD_BATTERY: 'battery_percent',
+                self.POWER_CMD_TEMP: 'temperature_0_1c',
+                self.POWER_CMD_VOLTAGE: 'voltage_mv'
+            }
+            
+            power_data = {
+                'command': 'metrics_response',
+                'metric_type': metric_names.get(command, 'unknown'),
+                'value': value_16bit
+            }
+        else:
+            # Unknown power command
+            power_data = {
+                'command': 'unknown',
+                'raw_command': command,
+                'data0': data0,
+                'data1': data1
+            }
+        
+        return True, power_data
     
     def get_packet_type(self, packet_bytes):
         """Get the message type from a packet
