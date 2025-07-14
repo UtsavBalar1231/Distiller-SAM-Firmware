@@ -1,6 +1,6 @@
 #Author: PamirAI 
-#Date: 2025-05-05
-#Version: 0.1.0
+#Date: 2025-07-14
+#Version: 1.0.0
 #Description: This is the main program for the RP2040 SAM
 
 import machine
@@ -172,6 +172,48 @@ def process_uart_packet(packet_bytes):
     elif packet_type == protocol.TYPE_BUTTON:
         # Handle button packets if needed (currently only send, not receive)
         pass
+    
+    elif packet_type == protocol.TYPE_SYSTEM:
+        # Parse system packet (SoM → RP2040 system commands)
+        valid, system_data = protocol.parse_system_packet(packet_bytes)
+        if valid:
+            cmd_type = system_data.get('command', 'unknown')
+            
+            if cmd_type == 'ping':
+                # Respond to ping with pong
+                try:
+                    with uart_lock:
+                        pong_packet = protocol.create_system_pong_packet()
+                        uart0.write(pong_packet)
+                        if not PRODUCTION:
+                            print("Ping received, pong sent")
+                except Exception as e:
+                    print(f"Failed to send pong: {e}")
+            
+            elif cmd_type == 'version_request':
+                # Send firmware version response
+                try:
+                    with uart_lock:
+                        version_packet = protocol.create_firmware_version_packet()
+                        uart0.write(version_packet)
+                        if not PRODUCTION:
+                            print(f"Version sent: {protocol.FIRMWARE_VERSION_MAJOR}.{protocol.FIRMWARE_VERSION_MINOR}.{protocol.FIRMWARE_VERSION_PATCH}")
+                except Exception as e:
+                    print(f"Failed to send version: {e}")
+            
+            elif cmd_type == 'reset':
+                # Handle reset command
+                reset_type = system_data.get('reset_type', 0)
+                if not PRODUCTION:
+                    print(f"Reset command received: type={reset_type}")
+                # TODO: Implement actual reset logic based on reset_type
+            
+            else:
+                if not PRODUCTION:
+                    print(f"Unknown system command: {cmd_type}")
+        else:
+            if not PRODUCTION:
+                print(f"Invalid system packet: {[hex(b) for b in packet_bytes]}")
     
     else:
         if not PRODUCTION:
