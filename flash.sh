@@ -309,7 +309,7 @@ get_firmware_version() {
 # Get files to process
 get_files() {
 	if [[ "$FIRST_TIME_FLASH" == true ]]; then
-		echo "ULP/RPI_PICO-20240222-v1.22.2.uf2"
+		echo "ULP/RPI_PICO-20250415-v1.25.0.uf2"
 	elif [[ "$WIPE_AND_FLASH" == true ]]; then
 		echo "ULP/flash_nuke.uf2"
 	else
@@ -338,7 +338,7 @@ handle_wipe_flash() {
 
 	# Step 3: Flash MicroPython
 	echo "Step 3: Installing MicroPython..."
-	flash_uf2 "ULP/RPI_PICO-20240222-v1.22.2.uf2" || return 1
+	flash_uf2 "ULP/RPI_PICO-20250415-v1.25.0.uf2" || return 1
 
 	# Step 4: Wait for MicroPython
 	# echo "Step 4: Waiting for MicroPython..."

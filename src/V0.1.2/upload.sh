@@ -64,7 +64,7 @@ if [ "$1" == "--wipe" ]; then
   
   # Copy MicroPython firmware
   echo "Copying MicroPython firmware..."
-  cp "$SCRIPT_DIR/ULP/RPI_PICO-20240222-v1.22.2.uf2" /Volumes/RPI-RP2/
+  cp "$SCRIPT_DIR/ULP/RPI_PICO-20250415-v1.25.0.uf2" /Volumes/RPI-RP2/
   
   # Wait for device to disappear
   wait_for_rp2_disappear
@@ -78,7 +78,7 @@ elif [ "$1" == "--first" ]; then
   
   # Copy MicroPython firmware
   echo "Copying MicroPython firmware..."
-  cp "$SCRIPT_DIR/ULP/RPI_PICO-20240222-v1.22.2.uf2" /Volumes/RPI-RP2/
+  cp "$SCRIPT_DIR/ULP/RPI_PICO-20250415-v1.25.0.uf2" /Volumes/RPI-RP2/
   
   # Wait for device to disappear
   wait_for_rp2_disappear

@@ -51,7 +51,7 @@ cd Distiller-SAM-Firmware
 ```
 
 2. Install the required MicroPython firmware to the RP2040:
-   - Use the firmware in the ULP folder: `RPI_PICO-20240222-v1.22.2.uf2`
+   - Use the firmware in the ULP folder: `RPI_PICO-20250415-v1.25.0.uf2`
 
 3. Deploy the firmware files to the RP2040 using your preferred MicroPython deployment method
 
@@ -170,7 +170,7 @@ distiller-sam-firmware/
 │   ├── V0.2.2/                   # Latest firmware version
 │   └── DistillerOne/             # Specialized firmware variant
 ├── ULP/                          # MicroPython firmware files
-│   ├── RPI_PICO-20240222-v1.22.2.uf2
+│   ├── RPI_PICO-20250415-v1.25.0.uf2
 │   └── flash_nuke.uf2
 ├── Tools/                        # Development and debugging utilities
 ├── Asset/                        # Assets and resources
