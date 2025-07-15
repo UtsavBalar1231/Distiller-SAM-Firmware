@@ -119,11 +119,27 @@ def led_completion_callback(led_id, sequence_length):
         print(f"LED acknowledgment failed: {e}")
 
 # Initialize controllers
-np_controller = NeoPixelController(pin=20, num_leds=1, default_brightness=0.5, 
+np_controller = NeoPixelController(pin=6, num_leds=7, default_brightness=0.5, 
                                    completion_callback=led_completion_callback)
 
 # Initialize power manager with BQ27441 (3000mAh design capacity)
 power_manager = PowerManager(design_capacity_mah=3000, debug_enabled=not PRODUCTION)
+
+# def test_all_leds_blink_green():
+#     """Quick test function to make all 7 LEDs blink green"""
+#     debug_print("Testing all 7 LEDs - blinking green...")
+    
+#     # Add command to make all LEDs blink green
+#     np_controller.add_to_queue(
+#         led_id=255,        # 255 = all LEDs
+#         mode=np_controller.MODE_BLINK,  # Blink mode
+#         color_data=(0, 15, 0),  # Green color (4-bit RGB: R=0, G=15, B=0)
+#         time_value=5       # Medium blink speed
+#     )
+    
+#     # Execute the animation
+#     np_controller.execute_queue()
+#     debug_print("All 7 LEDs should now be blinking green!")
 
 def add_led_command_to_queue(command):
     """Thread-safe function to add LED command to inter-core queue"""
@@ -260,6 +276,9 @@ downBTN.irq(trigger=machine.Pin.IRQ_RISING | machine.Pin.IRQ_FALLING, handler=bu
 sam_interrupt.irq(trigger=machine.Pin.IRQ_RISING, handler=loading_terminator)
 
 debug_print(f"[RP2040 DEBUG] Initialized NeoPixel Controller\n")
+
+# Uncomment the line below to test all 7 LEDs blinking green
+# test_all_leds_blink_green()
 
 einkStatus.high() # provide power to eink
 einkMux.high() # SAM CONTROL E-INK

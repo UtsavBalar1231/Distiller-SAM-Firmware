@@ -18,7 +18,7 @@ class NeoPixelController:
     MODE_RAINBOW = 3
     MODE_SEQUENCE = 4
     
-    def __init__(self, pin=6, num_leds=1, default_brightness=0.5, completion_callback=None):
+    def __init__(self, pin=6, num_leds=7, default_brightness=0.5, completion_callback=None):
         self.pin = pin
         self.num_leds = num_leds
         self.np = neopixel.NeoPixel(machine.Pin(pin), num_leds)
