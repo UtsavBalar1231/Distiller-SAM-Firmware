@@ -60,7 +60,7 @@ class ImprovedUartHandler:
     def _debug_log(self, level, message):
         """Log debug message if debug handler available"""
         if self.debug:
-            self.debug.log(level, f"[UartHandler] {message}")
+            self.debug.log(level, "UART", f"[UartHandler] {message}")
     
     def _add_to_buffer(self, data):
         """Add data to circular buffer with overflow protection
@@ -79,7 +79,7 @@ class ImprovedUartHandler:
             # Check for buffer overflow
             if self.buffer_count >= self.MAX_BUFFER_SIZE:
                 self.stats["buffer_overflows"] += 1
-                self._debug_log("ERROR", f"Buffer overflow! Forcing flush.")
+                self._debug_log(1, f"Buffer overflow! Forcing flush.")
                 self._force_buffer_flush()
                 
             # Add byte to circular buffer
@@ -132,7 +132,7 @@ class ImprovedUartHandler:
         self.sync_state = "SEARCHING"
         self.consecutive_valid = 0
         self.consecutive_invalid = 0
-        self._debug_log("WARNING", "Buffer forcibly flushed")
+        self._debug_log(2, "Buffer forcibly flushed")
     
     def _find_packet_boundary(self):
         """Search for valid packet boundary using frame synchronization
@@ -152,7 +152,7 @@ class ImprovedUartHandler:
             # Quick validation without expensive logging
             if self._is_valid_packet_fast(packet_data):
                 if offset > 0:
-                    self._debug_log("INFO", f"Found packet boundary at offset {offset}")
+                    self._debug_log(2, f"Found packet boundary at offset {offset}")
                 return offset
                 
         return -1
@@ -202,11 +202,11 @@ class ImprovedUartHandler:
         self.consecutive_valid = 0
         self.consecutive_invalid += 1
         
-        self._debug_log("WARNING", f"Sync loss detected. Invalid count: {self.consecutive_invalid}")
+        self._debug_log(2, f"Sync loss detected. Invalid count: {self.consecutive_invalid}")
         
         # If too many consecutive invalid packets, force resync
         if self.consecutive_invalid >= 3:
-            self._debug_log("ERROR", "Multiple invalid packets. Forcing resync.")
+            self._debug_log(1, "Multiple invalid packets. Forcing resync.")
             self._force_resync()
     
     def _force_resync(self):
@@ -218,7 +218,7 @@ class ImprovedUartHandler:
             # Found boundary - discard bytes before it
             if boundary_offset > 0:
                 self._consume_from_buffer(boundary_offset)
-                self._debug_log("INFO", f"Resynced by discarding {boundary_offset} bytes")
+                self._debug_log(2, f"Resynced by discarding {boundary_offset} bytes")
             
             self.sync_state = "SYNCED"
             self.consecutive_invalid = 0
@@ -227,7 +227,7 @@ class ImprovedUartHandler:
             discard_count = min(16, self.buffer_count // 2)
             if discard_count > 0:
                 self._consume_from_buffer(discard_count)
-                self._debug_log("WARNING", f"Discarded {discard_count} bytes while resyncing")
+                self._debug_log(2, f"Discarded {discard_count} bytes while resyncing")
             
             self.sync_state = "SEARCHING"
     
@@ -245,7 +245,7 @@ class ImprovedUartHandler:
             # If we were recovering and got a valid packet, consider synced
             if self.sync_state == "RECOVERING" and self.consecutive_valid >= 2:
                 self.sync_state = "SYNCED"
-                self._debug_log("INFO", "Frame sync recovered")
+                self._debug_log(2, "Frame sync recovered")
                 
         else:
             self.consecutive_valid = 0
@@ -268,10 +268,10 @@ class ImprovedUartHandler:
             data = self.uart.read()
             if data:
                 bytes_added = self._add_to_buffer(data)
-                self._debug_log("VERBOSE", f"Received {len(data)} bytes, buffered {bytes_added}")
+                self._debug_log(3, f"Received {len(data)} bytes, buffered {bytes_added}")
                 return bytes_added
         except Exception as e:
-            self._debug_log("ERROR", f"UART read error: {e}")
+            self._debug_log(1, f"UART read error: {e}")
             
         return 0
     
@@ -296,7 +296,7 @@ class ImprovedUartHandler:
                         self._consume_from_buffer(boundary_offset)
                         
                     self.sync_state = "SYNCED"
-                    self._debug_log("INFO", "Frame sync established")
+                    self._debug_log(2, "Frame sync established")
                     continue  # Process the packet in next iteration
                 else:
                     # No valid packet found - discard some bytes
@@ -328,9 +328,9 @@ class ImprovedUartHandler:
             
             # Log packet processing (minimal overhead)
             if valid:
-                self._debug_log("VERBOSE", f"✓ Valid packet processed")
+                self._debug_log(3, f"✓ Valid packet processed")
             else:
-                self._debug_log("WARNING", f"✗ Invalid packet: {packet_data.hex()}")
+                self._debug_log(2, f"✗ Invalid packet: {packet_data.hex()}")
                 
                 # If in synced state and got invalid packet, may need recovery
                 if self.sync_state == "SYNCED":
@@ -377,7 +377,7 @@ class ImprovedUartHandler:
             "buffer_overflows": 0,
             "last_reset": utime.ticks_ms()
         }
-        self._debug_log("INFO", "Statistics reset")
+        self._debug_log(2, "Statistics reset")
     
     def check_health(self):
         """Check handler health and perform maintenance

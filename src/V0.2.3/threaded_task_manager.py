@@ -34,15 +34,16 @@ class ThreadedTaskManager:
         
         # Task queues by priority
         self.task_queues = {
-            self.PRIORITY_CRITICAL: deque(),
-            self.PRIORITY_HIGH: deque(),
-            self.PRIORITY_NORMAL: deque(),
-            self.PRIORITY_LOW: deque()
+            self.PRIORITY_CRITICAL: deque((), 100),
+            self.PRIORITY_HIGH: deque((), 100),
+            self.PRIORITY_NORMAL: deque((), 100),
+            self.PRIORITY_LOW: deque((), 100)
         }
         
         # Task tracking
         self.active_tasks = {}
-        self.completed_tasks = deque(maxlen=50)  # Keep last 50 completed tasks
+        self.completed_tasks = deque((), 50)  # Keep last 50 completed tasks
+        self.completed_tasks_maxlen = 50
         self.next_task_id = 1
         
         # Thread control
@@ -79,25 +80,25 @@ class ThreadedTaskManager:
     def _debug_log(self, level, message):
         """Log debug message if debug handler available"""
         if self.debug:
-            self.debug.log(level, f"[TaskMgr] {message}")
+            self.debug.log(level, "SYS", f"[TaskMgr] {message}")
     
     def _start_worker_threads(self):
         """Start worker threads for different priority levels"""
         try:
             # Core 1 worker for critical tasks (UART)
             _thread.start_new_thread(self._core1_worker, ())
-            self._debug_log("INFO", "Core 1 worker started (CRITICAL priority)")
+            self._debug_log(2, "Core 1 worker started (CRITICAL priority)")
             
             # Core 0 worker for other tasks
             _thread.start_new_thread(self._core0_worker, ())
-            self._debug_log("INFO", "Core 0 worker started (HIGH/NORMAL/LOW priority)")
+            self._debug_log(2, "Core 0 worker started (HIGH/NORMAL/LOW priority)")
             
         except Exception as e:
-            self._debug_log("ERROR", f"Failed to start worker threads: {e}")
+            self._debug_log(1, f"Failed to start worker threads: {e}")
     
     def _core1_worker(self):
         """Core 1 worker - handles only critical UART tasks"""
-        self._debug_log("INFO", "Core 1 worker thread started")
+        self._debug_log(2, "Core 1 worker thread started")
         
         while not self.shutdown_requested:
             try:
@@ -111,12 +112,12 @@ class ThreadedTaskManager:
                     utime.sleep_ms(1)
                     
             except Exception as e:
-                self._debug_log("ERROR", f"Core 1 worker error: {e}")
+                self._debug_log(1, f"Core 1 worker error: {e}")
                 utime.sleep_ms(10)
     
     def _core0_worker(self):
         """Core 0 worker - handles all non-critical tasks with priority ordering"""
-        self._debug_log("INFO", "Core 0 worker thread started")
+        self._debug_log(2, "Core 0 worker thread started")
         
         while not self.shutdown_requested:
             try:
@@ -137,7 +138,7 @@ class ThreadedTaskManager:
                     utime.sleep_ms(10)
                     
             except Exception as e:
-                self._debug_log("ERROR", f"Core 0 worker error: {e}")
+                self._debug_log(1, f"Core 0 worker error: {e}")
                 utime.sleep_ms(10)
     
     def _get_next_task(self, priority):
@@ -172,7 +173,8 @@ class ThreadedTaskManager:
                 task["core_id"] = core_id
                 self.active_tasks[task["id"]] = task
             
-            self._debug_log("VERBOSE", f"Executing task {task['id']} ({task['name']}) on Core {core_id}")
+            exec_msg = "Executing task {} ({}) on Core {}".format(task['id'], task['name'], core_id)
+            self._debug_log(3, exec_msg)
             
             # Execute the task function
             result = None
@@ -196,6 +198,9 @@ class ThreadedTaskManager:
             # Move to completed tasks
             with self.thread_locks["completed_tasks"]:
                 self.completed_tasks.append(task)
+                # Manual maxlen enforcement for MicroPython compatibility
+                while len(self.completed_tasks) > self.completed_tasks_maxlen:
+                    self.completed_tasks.popleft()
             
             # Update statistics
             self.stats["tasks_completed"] += 1
@@ -204,14 +209,16 @@ class ThreadedTaskManager:
             else:
                 self.stats["core1_busy_time"] += duration
             
-            self._debug_log("VERBOSE", f"Task {task['id']} completed in {duration}ms")
+            complete_msg = "Task {} completed in {}ms".format(task['id'], duration)
+            self._debug_log(3, complete_msg)
             
             # Call completion callback if provided
             if task.get("completion_callback"):
                 try:
                     task["completion_callback"](task["id"], result)
                 except Exception as e:
-                    self._debug_log("WARNING", f"Task {task['id']} callback failed: {e}")
+                    callback_msg = "Task {} callback failed: {}".format(task['id'], e)
+                    self._debug_log(2, callback_msg)
                     
         except Exception as e:
             # Task failed
@@ -229,16 +236,21 @@ class ThreadedTaskManager:
             # Move to completed tasks
             with self.thread_locks["completed_tasks"]:
                 self.completed_tasks.append(task)
+                # Manual maxlen enforcement for MicroPython compatibility
+                while len(self.completed_tasks) > self.completed_tasks_maxlen:
+                    self.completed_tasks.popleft()
             
             self.stats["tasks_failed"] += 1
-            self._debug_log("ERROR", f"Task {task['id']} ({task['name']}) failed: {e}")
+            error_msg = "Task {} ({}) failed: {}".format(task['id'], task['name'], e)
+            self._debug_log(1, error_msg)
             
             # Call error callback if provided
             if task.get("error_callback"):
                 try:
                     task["error_callback"](task["id"], str(e))
                 except Exception as callback_error:
-                    self._debug_log("ERROR", f"Task {task['id']} error callback failed: {callback_error}")
+                    err_callback_msg = "Task {} error callback failed: {}".format(task['id'], callback_error)
+                    self._debug_log(1, err_callback_msg)
     
     def submit_task(self, name, function, args=None, priority=PRIORITY_NORMAL, 
                    completion_callback=None, error_callback=None):
@@ -281,11 +293,13 @@ class ThreadedTaskManager:
             if priority in self.task_queues:
                 self.task_queues[priority].append(task)
             else:
-                self._debug_log("WARNING", f"Invalid priority {priority}, using NORMAL")
+                priority_msg = "Invalid priority {}, using NORMAL".format(priority)
+                self._debug_log(2, priority_msg)
                 self.task_queues[self.PRIORITY_NORMAL].append(task)
         
         self.stats["tasks_created"] += 1
-        self._debug_log("VERBOSE", f"Task {task_id} ({name}) submitted with priority {priority}")
+        submit_msg = "Task {} ({}) submitted with priority {}".format(task_id, name, priority)
+        self._debug_log(3, submit_msg)
         
         return task_id
     
@@ -353,9 +367,13 @@ class ThreadedTaskManager:
                         # Move to completed tasks
                         with self.thread_locks["completed_tasks"]:
                             self.completed_tasks.append(task)
+                            # Manual maxlen enforcement for MicroPython compatibility
+                            while len(self.completed_tasks) > self.completed_tasks_maxlen:
+                                self.completed_tasks.popleft()
                         
                         self.stats["tasks_cancelled"] += 1
-                        self._debug_log("INFO", f"Task {task_id} cancelled")
+                        cancel_msg = "Task {} cancelled".format(task_id)
+                        self._debug_log(2, cancel_msg)
                         return True
         
         return False
@@ -439,7 +457,7 @@ class ThreadedTaskManager:
     
     def shutdown(self):
         """Shutdown task manager and worker threads"""
-        self._debug_log("INFO", "Shutting down task manager...")
+        self._debug_log(2, "Shutting down task manager...")
         self.shutdown_requested = True
         
         # Wait a bit for threads to finish current tasks
@@ -456,4 +474,4 @@ class ThreadedTaskManager:
                         self.completed_tasks.append(task)
                     self.stats["tasks_cancelled"] += 1
         
-        self._debug_log("INFO", "Task manager shutdown complete")
+        self._debug_log(2, "Task manager shutdown complete")

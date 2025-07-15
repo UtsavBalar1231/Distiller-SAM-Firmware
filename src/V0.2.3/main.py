@@ -19,7 +19,7 @@ from power_manager import PowerManager
 
 # Configuration
 PRODUCTION = False  # Set to True for production builds
-INITIAL_DEBUG_LEVEL = DebugHandler.LEVEL_INFO if not PRODUCTION else DebugHandler.LEVEL_ERROR
+INITIAL_DEBUG_LEVEL = DebugHandler.LEVEL_VERBOSE if not PRODUCTION else DebugHandler.LEVEL_ERROR
 
 # Hardware configuration
 UART_BAUDRATE = 115200
@@ -30,10 +30,10 @@ BUTTON_DEBOUNCE_MS = 50
 
 # Initialize global components
 debug = init_debug_handler(
-    level=INITIAL_DEBUG_LEVEL,
-    enable_uart_output=not PRODUCTION,
-    buffer_size=100,
-    enable_statistics=True
+    INITIAL_DEBUG_LEVEL,    # level
+    not PRODUCTION,         # enable_uart_output
+    100,                    # buffer_size
+    True                    # enable_statistics
 )
 
 # Initialize watchdog
@@ -89,6 +89,9 @@ def switch_usb(usb_type):
 set_debug_color("INIT")
 debug.log_info(debug.CAT_SYSTEM, "=== RP2040 SAM Firmware v1.0.0 Starting ===")
 
+# USB switch setup
+switch_usb("SOM_USB")
+
 # Initialize protocol handler
 protocol = PamirUartProtocols()
 debug.protocol = protocol  # Allow debug handler to create debug packets
@@ -117,12 +120,12 @@ def led_completion_callback(led_id, sequence_length):
             if sequence_length > 0:
                 packet = protocol.create_led_completion_packet(led_id, sequence_length)
                 uart0.write(packet)
-                debug.log_info(debug.CAT_LED, f"LED completion ACK: LED{led_id}, {sequence_length} commands")
+                debug.log_info(debug.CAT_LED, f"LED completion ACK: LED{led_id}, {sequence_length} commands -> TX: {packet.hex()}")
             elif sequence_length < 0:
                 error_code = abs(sequence_length)
                 packet = protocol.create_led_error_packet(led_id, error_code)
                 uart0.write(packet)
-                debug.log_error(debug.CAT_LED, f"LED error ACK: LED{led_id}, error {error_code}")
+                debug.log_error(debug.CAT_LED, f"LED error ACK: LED{led_id}, error {error_code} -> TX: {packet.hex()}")
         except Exception as e:
             debug.log_error(debug.CAT_LED, f"LED ACK failed: {e}")
     
@@ -142,8 +145,6 @@ debug.log_info(debug.CAT_LED, "NeoPixel controller initialized")
 einkMux.low()   # EINK OFF initially
 einkStatus.low() # SOM CONTROL E-INK
 
-# USB switch setup
-switch_usb("SOM_USB")
 debug.log_info(debug.CAT_SYSTEM, "Hardware initialization complete")
 
 # Global state
@@ -212,7 +213,7 @@ def process_power_packet(packet_data):
                     current_state = power_manager.get_power_state()
                     packet = protocol.create_power_status_packet_rp2040_to_som(current_state, 0x00)
                     uart0.write(packet)
-                    debug.log_info(debug.CAT_POWER, f"Power status sent: 0x{current_state:02X}")
+                    debug.log_info(debug.CAT_POWER, f"Power status sent: 0x{current_state:02X} -> TX: {packet.hex()}")
                     
                 elif cmd_type == "set_state":
                     new_state = power_data.get("power_state", power_manager.current_power_state)
@@ -267,7 +268,7 @@ def process_system_packet(packet_data):
                 try:
                     ping_response = protocol.create_system_ping_packet()
                     uart0.write(ping_response)
-                    debug.log_info(debug.CAT_SYSTEM, "Ping response sent")
+                    debug.log_info(debug.CAT_SYSTEM, f"Ping response sent -> TX: {ping_response.hex()}")
                 except Exception as e:
                     debug.log_error(debug.CAT_SYSTEM, f"Ping response failed: {e}")
             
@@ -279,13 +280,16 @@ def process_uart_packet(packet_data):
     
     # Route to appropriate handler
     if packet_type == protocol.TYPE_LED:
+        debug.log_info(debug.CAT_LED, f"Processing LED packet: {packet_data.hex()}")
         process_led_packet(packet_data)
     elif packet_type == protocol.TYPE_POWER:
+        debug.log_info(debug.CAT_POWER, f"Processing POWER packet: {packet_data.hex()}")
         process_power_packet(packet_data)
     elif packet_type == protocol.TYPE_SYSTEM:
+        debug.log_info(debug.CAT_SYSTEM, f"Processing SYSTEM packet: {packet_data.hex()}")
         process_system_packet(packet_data)
     else:
-        debug.log_verbose(debug.CAT_UART, f"Unhandled packet type: 0x{packet_type:02X}")
+        debug.log_info(debug.CAT_UART, f"Unhandled packet type: 0x{packet_type:02X} data={packet_data.hex()}")
 
 # Button handling
 def debounce_button(pin, debounce_ms=BUTTON_DEBOUNCE_MS):
@@ -319,7 +323,7 @@ def send_button_state():
             )
             
             uart0.write(packet)
-            debug.log_info(debug.CAT_BUTTON, f"Button state: {states}")
+            debug.log_info(debug.CAT_BUTTON, f"Button state: {states} -> TX: {packet.hex()}")
             button_state_cache = states.copy()
             
     except Exception as e:
@@ -383,7 +387,8 @@ def uart_communication_task():
             for valid, packet_data in processed_packets:
                 if valid:
                     set_debug_color("PACKET_VALID")
-                    debug.log_verbose(debug.CAT_UART, "Valid packet processed")
+                    packet_type = protocol.get_packet_type(packet_data)
+                    debug.log_info(debug.CAT_UART, f"Valid packet: type=0x{packet_type:02X} data={packet_data.hex()}")
                     process_uart_packet(packet_data)
                 else:
                     set_debug_color("PACKET_INVALID")
@@ -393,21 +398,25 @@ def uart_communication_task():
             current_time = utime.ticks_ms()
             if utime.ticks_diff(current_time, last_stats_time) >= stats_interval:
                 uart_stats = uart_handler.get_statistics()
-                debug.log_info(debug.CAT_PERFORMANCE, 
-                    f"UART: {uart_stats['success_rate_percent']}% success, "
-                    f"{uart_stats['buffer_usage_percent']}% buffer, "
-                    f"state: {uart_stats['sync_state']}")
+                uart_msg = "UART: {}% success, {}% buffer, state: {}".format(
+                    uart_stats['success_rate_percent'],
+                    uart_stats['buffer_usage_percent'],
+                    uart_stats['sync_state']
+                )
+                debug.log_info(debug.CAT_PERFORMANCE, uart_msg)
                 
                 task_stats = task_manager.get_statistics()
-                debug.log_info(debug.CAT_PERFORMANCE,
-                    f"Tasks: {task_stats['tasks_completed']} done, "
-                    f"Core0: {task_stats['core0_utilization_percent']}%, "
-                    f"Core1: {task_stats['core1_utilization_percent']}%")
+                task_msg = "Tasks: {} done, Core0: {}%, Core1: {}%".format(
+                    task_stats['tasks_completed'],
+                    task_stats['core0_utilization_percent'],
+                    task_stats['core1_utilization_percent']
+                )
+                debug.log_info(debug.CAT_PERFORMANCE, task_msg)
                 
                 last_stats_time = current_time
             
             # Brief sleep to prevent overwhelming CPU
-            utime.sleep_ms(1)
+            utime.sleep_ms(0)
             
         except Exception as e:
             debug.log_error(debug.CAT_UART, f"UART task error: {e}")
@@ -489,7 +498,8 @@ while True:
             # Check UART handler health
             uart_health = uart_handler.check_health()
             if uart_health["status"] != "HEALTHY":
-                debug.log_error(debug.CAT_SYSTEM, f"UART health: {uart_health['status']} - {uart_health['issues']}")
+                health_msg = "UART health: {} - {}".format(uart_health['status'], uart_health['issues'])
+                debug.log_error(debug.CAT_SYSTEM, health_msg)
             
             # Send heartbeat debug code to kernel
             debug.send_debug_code(uart0, 0, 0x01, 0)  # System category, heartbeat code

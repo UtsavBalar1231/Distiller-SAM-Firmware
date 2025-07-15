@@ -27,8 +27,7 @@ class DebugHandler:
     CAT_UART = "UART"          # UART communication events
     CAT_PERFORMANCE = "PERF"   # Performance metrics
     
-    def __init__(self, initial_level=LEVEL_ERROR, enable_uart_output=True, 
-                 buffer_size=100, enable_statistics=True):
+    def __init__(self, initial_level, enable_uart_output, buffer_size, enable_statistics):
         """Initialize debug handler
         
         Args:
@@ -46,7 +45,8 @@ class DebugHandler:
         
         # Circular buffer for debug messages
         self.buffer_size = buffer_size
-        self.debug_buffer = deque(maxlen=buffer_size)
+        self.debug_buffer = deque((), buffer_size)
+        self.debug_buffer_maxlen = buffer_size
         self.buffer_lock = _thread.allocate_lock()
         
         # Statistics tracking
@@ -175,6 +175,9 @@ class DebugHandler:
         # Add to circular buffer (thread-safe)
         with self.buffer_lock:
             self.debug_buffer.append(log_entry)
+            # Manual maxlen enforcement for MicroPython compatibility
+            while len(self.debug_buffer) > self.debug_buffer_maxlen:
+                self.debug_buffer.popleft()
         
         # Output to UART/console if enabled
         if self.enable_uart_output:
@@ -230,7 +233,8 @@ class DebugHandler:
         if valid is not None:
             validity_str = " ✓" if valid else " ✗"
             
-        self.log_uart(self.LEVEL_VERBOSE, f"{direction}: [{hex_str}] len={len(packet_bytes)}{validity_str}")
+        packet_msg = "{}: [{}] len={}{}".format(direction, hex_str, len(packet_bytes), validity_str)
+        self.log_uart(self.LEVEL_VERBOSE, packet_msg)
     
     def log_button(self, level, message):
         """Log button-related message"""
@@ -394,19 +398,31 @@ def get_debug_handler():
     """Get global debug handler instance"""
     global _global_debug_handler
     if _global_debug_handler is None:
-        _global_debug_handler = DebugHandler()
+        _global_debug_handler = DebugHandler(
+            initial_level=DebugHandler.LEVEL_ERROR,
+            enable_uart_output=True,
+            buffer_size=100,
+            enable_statistics=True
+        )
     return _global_debug_handler
 
-def init_debug_handler(level=DebugHandler.LEVEL_ERROR, **kwargs):
+def init_debug_handler(level, enable_uart_output, buffer_size, enable_statistics):
     """Initialize global debug handler
     
     Args:
         level: Initial debug level
-        **kwargs: Additional arguments for DebugHandler constructor
+        enable_uart_output: Whether to output to UART/console
+        buffer_size: Size of circular debug buffer
+        enable_statistics: Whether to track debug statistics
         
     Returns:
         DebugHandler: Initialized debug handler
     """
     global _global_debug_handler
-    _global_debug_handler = DebugHandler(initial_level=level, **kwargs)
+    _global_debug_handler = DebugHandler(
+        initial_level=level,
+        enable_uart_output=enable_uart_output,
+        buffer_size=buffer_size,
+        enable_statistics=enable_statistics
+    )
     return _global_debug_handler

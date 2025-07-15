@@ -33,7 +33,7 @@ PYTHON_FILES = [
 
 # UF2 Files (located in UF2_DIRECTORY)
 FLASH_NUKE_UF2 = "flash_nuke.uf2"
-MICROPYTHON_UF2 = "RPI_PICO-20250415-v1.25.0.uf2"
+MICROPYTHON_UF2 = "RPI_PICO-20240222-v1.22.2.uf2"
 
 # AppleScript to dismiss macOS notifications
 APPLESCRIPT_CODE = """tell application "System Events"
