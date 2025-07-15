@@ -12,14 +12,37 @@ import math
 from pamir_uart_protocols import PamirUartProtocols
 from neopixel_controller import NeoPixelController
 from power_manager import PowerManager
+import neopixel
+
+
+PRODUCTION = False  #for production flash, set to true for usb debug
+
+# Debug RGB setup (using neopixel library directly)
+debug_rgb = neopixel.NeoPixel(machine.Pin(20), 1)
+
+# Debug color constants
+DEBUG_COLORS = {
+    'OFF': (0, 0, 0),
+    'INIT': (255, 0, 0),        # Red - Initialization
+    'EINK_SETUP': (255, 165, 0), # Orange - E-ink setup
+    'EINK_RUNNING': (255, 255, 0), # Yellow - E-ink animation
+    'UART_READY': (0, 255, 0),   # Green - UART ready
+    'MAIN_LOOP': (0, 0, 255),    # Blue - Main loop running
+    'ERROR': (255, 0, 255),      # Magenta - Error state
+    'USB_SWITCH': (0, 255, 255), # Cyan - USB switch mode
+    'SHUTDOWN': (128, 0, 128)    # Purple - Shutdown
+}
+
+def set_debug_color(color_name):
+    """Set debug RGB color"""
+    if color_name in DEBUG_COLORS:
+        color = DEBUG_COLORS[color_name]
+        debug_rgb[0] = color
+        debug_rgb.write()
+
+# Set initial debug color
 
 pmic_enable = machine.Pin(3, machine.Pin.IN, pull=None)
-
-PRODUCTION = True  #for production flash, set to true for usb debug
-UART_DEBUG = False #for UART debug, set to true for UART debug
-
-# Initialize protocol handler
-protocol = PamirUartProtocols()
 
 USB_SWITCH_TABLE = {"SAM_USB": [0,0], "SOM_USB": [1,0]} # S, OE_N
 # usb_switch_oe_n = machine.Pin(19, machine.Pin.OUT, value = 0)
@@ -33,7 +56,9 @@ def switch_usb(usb_type):
     else:
         print(f"Invalid USB type: {usb_type}")
 
+switch_usb("SOM_USB") # Disable SAM USB
 
+set_debug_color('INIT')
 wdt = WDT(timeout=2000)
 # Set up GPIO pins
 selectBTN = machine.Pin(16, machine.Pin.IN, machine.Pin.PULL_DOWN)
@@ -44,9 +69,8 @@ einkMux = machine.Pin(22, machine.Pin.OUT)
 sam_interrupt = machine.Pin(2, machine.Pin.OUT)
 # Debounce time in milliseconds
 debounce_time = 50
-
-if PRODUCTION:
-    switch_usb("SOM_USB") # Disable SAM USB
+# Initialize protocol handler
+protocol = PamirUartProtocols()
     
 # Setup UART0 on GPIO0 (TX) and GPIO1 (RX)
 uart0 = machine.UART(0, baudrate=115200, tx=machine.Pin(0), rx=machine.Pin(1))
@@ -57,9 +81,8 @@ print("Starting...")
 
 # Function to handle UART debug messages
 def debug_print(message):
-    if UART_DEBUG:
-        uart0.write(message)
-    print(message)
+    if not PRODUCTION:
+        print(message)
 
 
 # Add lock for shared variable
@@ -85,15 +108,13 @@ def led_completion_callback(led_id, sequence_length):
                 # Send completion acknowledgment
                 packet = protocol.create_led_completion_packet(led_id, sequence_length)
                 uart0.write(packet)
-                if not PRODUCTION:
-                    print(f"LED completion ACK sent: LED{led_id}, {sequence_length} commands")
+                debug_print(f"LED completion ACK sent: LED{led_id}, {sequence_length} commands")
             elif sequence_length < 0:
                 # Send error report (sequence_length is negative error code)
                 error_code = abs(sequence_length)
                 packet = protocol.create_led_error_packet(led_id, error_code)
                 uart0.write(packet)
-                if not PRODUCTION:
-                    print(f"LED error ACK sent: LED{led_id}, error {error_code}")
+                debug_print(f"LED error ACK sent: LED{led_id}, error {error_code}")
     except Exception as e:
         print(f"LED acknowledgment failed: {e}")
 
@@ -142,8 +163,7 @@ def process_uart_packet(packet_bytes):
         if valid:
             # Add to LED command queue for core 0 to process
             add_led_command_to_queue(led_data)
-            if not PRODUCTION:
-                print(f"LED command queued: {led_data}")
+            debug_print(f"LED command queued: {led_data}")
         else:
             # Try parsing as LED acknowledgment/status request
             valid_ack, ack_data = protocol.parse_led_acknowledgment(packet_bytes)
@@ -154,8 +174,7 @@ def process_uart_packet(packet_bytes):
                     'led_id': ack_data['led_id'],
                     'status_code': ack_data['status_code']
                 })
-                if not PRODUCTION:
-                    print(f"LED status request: {ack_data}")
+                debug_print(f"LED status request: {ack_data}")
     
     elif packet_type == protocol.TYPE_POWER:
         # Parse power packet (SoM → RP2040 commands)
@@ -163,21 +182,34 @@ def process_uart_packet(packet_bytes):
         if valid:
             # Add to power command queue for core 0 to process
             add_power_command_to_queue(power_data)
-            if not PRODUCTION:
-                print(f"Power command queued: {power_data}")
+            debug_print(f"Power command queued: {power_data}")
         else:
-            if not PRODUCTION:
-                print(f"Invalid power packet: {[hex(b) for b in packet_bytes]}")
+            debug_print(f"Invalid power packet: {[hex(b) for b in packet_bytes]}")
     
     elif packet_type == protocol.TYPE_BUTTON:
         # Handle button packets if needed (currently only send, not receive)
         pass
     
+    elif packet_type == protocol.TYPE_SYSTEM:
+        # Handle system commands
+        valid, system_data = protocol.parse_system_packet(packet_bytes)
+        if valid:
+            if system_data['command'] == 'ping':
+                # Respond to ping with pong (same packet format)
+                try:
+                    with uart_lock:
+                        ping_response = protocol.create_system_ping_packet()
+                        uart0.write(ping_response)
+                        debug_print(f"System ping received, pong sent: {[hex(b) for b in ping_response]}")
+                except Exception as e:
+                    debug_print(f"Failed to send ping response: {e}")
+            else:
+                debug_print(f"Unhandled system command: {system_data['command']}")
+        else:
+            debug_print(f"Invalid system packet: {[hex(b) for b in packet_bytes]}")
+    
     else:
-        if not PRODUCTION:
-            print(f"Unknown packet type: 0x{packet_type:02X}")
-
-
+        debug_print(f"Unknown packet type: 0x{packet_type:02X}")
 
 
 # Function to debounce button press
@@ -206,9 +238,8 @@ def send_button_state():
         power_pressed=power_pressed
     )
     
-    if not PRODUCTION:
-        print(f"Button packet: {[hex(b) for b in packet]}")
-        print(f"Button states - UP: {up_pressed}, DOWN: {down_pressed}, SELECT: {select_pressed}")
+    debug_print(f"Button packet: {[hex(b) for b in packet]}")
+    debug_print(f"Button states - UP: {up_pressed}, DOWN: {down_pressed}, SELECT: {select_pressed}")
     
     uart0.write(packet)
 
@@ -233,27 +264,30 @@ debug_print(f"[RP2040 DEBUG] Initialized NeoPixel Controller\n")
 einkStatus.high() # provide power to eink
 einkMux.high() # SAM CONTROL E-INK
 
+# Set debug color for e-ink setup
+set_debug_color('EINK_SETUP')
+
 # Initialize e-ink display
 eink = einkDSP_SAM()
 
 debug_print("StartScreen\n")
 
-# Send boot notification to SoM (Raspberry Pi 5)
-def send_boot_notification():
-    """Send boot notification FROM RP2040 TO SoM to indicate RP2040 is running"""
-    try:
-        with uart_lock:
-            # Send power status packet indicating we're running
-            packet = protocol.create_power_status_packet_rp2040_to_som(
-                protocol.POWER_STATE_RUNNING, 0x00)
-            uart0.write(packet)
-            if not PRODUCTION:
-                print("[Boot] Boot notification sent to SoM")
-    except Exception as e:
-        print(f"[Boot] Failed to send boot notification: {e}")
+# # Send boot notification to SoM (Raspberry Pi 5)
+# def send_boot_notification():
+#     """Send boot notification FROM RP2040 TO SoM to indicate RP2040 is running"""
+#     try:
+#         with uart_lock:
+#             # Send power status packet indicating we're running
+#             packet = protocol.create_power_status_packet_rp2040_to_som(
+#                 protocol.POWER_STATE_RUNNING, 0x00)
+#             uart0.write(packet)
+#             if not PRODUCTION:
+#                 print("[Boot] Boot notification sent to SoM")
+#     except Exception as e:
+#         print(f"[Boot] Failed to send boot notification: {e}")
 
-# Send boot notification now that UART is initialized
-send_boot_notification()
+# # Send boot notification now that UART is initialized
+# send_boot_notification()
 
 # Shared flag to coordinate thread handoff
 thread_handoff_complete = False
@@ -265,6 +299,7 @@ def core1_task():
     # First, run the eink task
     try:
         einkRunning = True
+        set_debug_color('EINK_RUNNING')
         if eink.init == False:
             eink.re_init()
         
@@ -277,6 +312,7 @@ def core1_task():
             
         except OSError:
             print("Loading files not found")
+            set_debug_color('ERROR')
             einkRunning = False
         
         repeat = 0
@@ -297,6 +333,7 @@ def core1_task():
                 utime.sleep_ms(50)
             except OSError:
                 print("Animation files not found")
+                set_debug_color('ERROR')
                 break
                 
             wdt.feed()
@@ -309,6 +346,7 @@ def core1_task():
         print("Eink Task Completed")
     except Exception as e:
         print(f"Exception in eink task: {e}")
+        set_debug_color('ERROR')
         eink.de_init()
         with eink_lock:
             einkRunning = False
@@ -318,6 +356,7 @@ def core1_task():
     thread_handoff_complete = True
     
     # Start UART packet reception loop (Core 1)
+    set_debug_color('UART_READY')
     print("Starting UART reception loop on Core 1")
     uart_buffer = bytearray()
     
@@ -341,13 +380,13 @@ def core1_task():
                             if protocol.validate_packet(packet)[0]:
                                 process_uart_packet(packet)
                             else:
-                                if not PRODUCTION:
-                                    print(f"Invalid packet: {[hex(b) for b in packet]}")
+                                debug_print(f"Invalid packet: {[hex(b) for b in packet]}")
             
             utime.sleep_ms(1)  # Small delay to prevent overwhelming the CPU
             
         except Exception as e:
             print(f"UART reception error: {e}")
+            set_debug_color('ERROR')
             utime.sleep_ms(10)
 
 # Start the combined thread on core1
@@ -360,6 +399,8 @@ while True:
     
     # Only proceed with normal operation after handoff is complete
     if thread_handoff_complete:
+        # Set debug color for main loop
+        set_debug_color('MAIN_LOOP')
         # Process LED commands from queue (Core 0)
         led_commands = get_led_commands_from_queue()
         for command in led_commands:
@@ -386,8 +427,7 @@ while True:
                     with uart_lock:
                         packet = protocol.create_led_status_packet(led_id, status_code, status_value)
                         uart0.write(packet)
-                        if not PRODUCTION:
-                            print(f"LED status response: LED{led_id}, code{status_code}, value{status_value}")
+                        debug_print(f"LED status response: LED{led_id}, code{status_code}, value{status_value}")
                 
                 elif command.get('execute'):
                     # Execute all queued LED commands
@@ -416,11 +456,12 @@ while True:
                         time_value=time_value
                     )
                     
-                    if not PRODUCTION:
-                        print(f"LED command added to controller queue: LED{led_id}, color{command['color']}, mode{mode}")
+                    debug_print(f"LED command added to controller queue: LED{led_id}, color{command['color']}, mode{mode}")
                         
             except Exception as e:
                 print(f"Error processing LED command: {e}")
+                set_debug_color('ERROR')
+                utime.sleep_ms(100)  # Brief error indication
                 # Send error report
                 try:
                     error_led_id = command.get('led_id', 0)
@@ -442,8 +483,7 @@ while True:
                     with uart_lock:
                         packet = protocol.create_power_status_packet_rp2040_to_som(current_state, 0x00)
                         uart0.write(packet)
-                        if not PRODUCTION:
-                            print(f"Power status response sent: state=0x{current_state:02X}")
+                        debug_print(f"Power status response sent: state=0x{current_state:02X}")
                 
                 elif cmd_type == 'set_state':
                     # SoM → RP2040: Set power state
@@ -453,8 +493,7 @@ while True:
                     with uart_lock:
                         packet = protocol.create_power_status_packet_rp2040_to_som(new_state, 0x00)
                         uart0.write(packet)
-                        if not PRODUCTION:
-                            print(f"Power state set to: 0x{new_state:02X}")
+                        debug_print(f"Power state set to: 0x{new_state:02X}")
                 
                 elif cmd_type == 'sleep':
                     # SoM → RP2040: Enter sleep mode
@@ -473,8 +512,7 @@ while True:
                         packet = protocol.create_power_status_packet_rp2040_to_som(
                             protocol.POWER_STATE_OFF, shutdown_mode)
                         uart0.write(packet)
-                        if not PRODUCTION:
-                            print(f"Shutdown ACK sent: mode={shutdown_mode}")
+                        debug_print(f"Shutdown ACK sent: mode={shutdown_mode}")
                 
                 elif cmd_type == 'request_metrics':
                     # SoM → RP2040: Send all sensor metrics
@@ -484,54 +522,56 @@ while True:
                         # Send current measurement
                         current_packet = protocol.create_power_metrics_packet_rp2040_to_som(
                             protocol.POWER_CMD_CURRENT, metrics['current_ma'])
-                        uart0.write(current_packet)
+                        uart0.write(bytes(current_packet))
                         
                         # Send battery percentage
                         battery_packet = protocol.create_power_metrics_packet_rp2040_to_som(
                             protocol.POWER_CMD_BATTERY, metrics['battery_percent'])
-                        uart0.write(battery_packet)
+                        uart0.write(bytes(battery_packet))
                         
                         # Send temperature
                         temp_packet = protocol.create_power_metrics_packet_rp2040_to_som(
                             protocol.POWER_CMD_TEMP, metrics['temperature_0_1c'])
-                        uart0.write(temp_packet)
+                        uart0.write(bytes(temp_packet))
                         
                         # Send voltage
                         voltage_packet = protocol.create_power_metrics_packet_rp2040_to_som(
                             protocol.POWER_CMD_VOLTAGE, metrics['voltage_mv'])
-                        uart0.write(voltage_packet)
+                        uart0.write(bytes(voltage_packet))
                         
-                        if not PRODUCTION:
-                            print(f"Metrics sent: {metrics}")
+                        debug_print(f"Metrics sent: {metrics}")
                 
                 else:
-                    if not PRODUCTION:
-                        print(f"Unknown power command: {cmd_type}")
+                    debug_print(f"Unknown power command: {cmd_type}")
                         
             except Exception as e:
                 print(f"Error processing power command: {e}")
+                set_debug_color('ERROR')
+                utime.sleep_ms(100)  # Brief error indication
         
-        # Special button combination handling (UP + SELECT for 10 seconds = USB switch)
-        if debounce(upBTN) and selectBTN.value() == 1:
-            start_time = utime.ticks_ms()
-            while utime.ticks_diff(utime.ticks_ms(), start_time) < 10000:
-                if upBTN.value() == 0 or selectBTN.value() == 0:
-                    break
-                if utime.ticks_diff(utime.ticks_ms(), start_time) >= 2000:
-                    # Send shutdown packet using new protocol
-                    with uart_lock:
-                        packet = protocol.create_power_status_packet_rp2040_to_som(
-                            protocol.POWER_STATE_OFF, 0x00)
-                        uart0.write(packet)
-                wdt.feed()
-                utime.sleep_ms(10)
-            if utime.ticks_diff(utime.ticks_ms(), start_time) >= 10000:
-                einkStatus.low()  
-                einkMux.low() # SOM CONTROL E-INK
-                uart0.write("xSAM_USB\n")
-                if PRODUCTION:
-                    switch_usb("SAM_USB")
-                einkRunning = False
+        # # Special button combination handling (UP + SELECT for 10 seconds = USB switch)
+        # if debounce(upBTN) and selectBTN.value() == 1:
+        #     start_time = utime.ticks_ms()
+        #     while utime.ticks_diff(utime.ticks_ms(), start_time) < 10000:
+        #         if upBTN.value() == 0 or selectBTN.value() == 0:
+        #             break
+        #         if utime.ticks_diff(utime.ticks_ms(), start_time) >= 2000:
+        #             # Send shutdown packet using new protocol
+        #             set_debug_color('SHUTDOWN')
+        #             with uart_lock:
+        #                 packet = protocol.create_power_status_packet_rp2040_to_som(
+        #                     protocol.POWER_STATE_OFF, 0x00)
+        #                 uart0.write(packet)
+        #         wdt.feed()
+        #         utime.sleep_ms(10)
+        #     if utime.ticks_diff(utime.ticks_ms(), start_time) >= 10000:
+        #         set_debug_color('USB_SWITCH')
+        #         einkStatus.low()  
+        #         einkMux.low() # SOM CONTROL E-INK
+        #         uart0.write("xSAM_USB\n")
+        #         if PRODUCTION:
+        #             switch_usb("SAM_USB")
+        #         einkRunning = False
     
     utime.sleep_ms(1)
 

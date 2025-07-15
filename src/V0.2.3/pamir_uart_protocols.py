@@ -17,6 +17,13 @@ class PamirUartProtocols:
     TYPE_SYSTEM = 0xC0      # 0b110xxxxx - Core system control commands
     TYPE_EXTENDED = 0xE0    # 0b111xxxxx - Extended commands
     
+    # System command constants (5 LSB of type_flags for system commands)
+    SYSTEM_PING = 0x00      # Ping for connectivity test
+    SYSTEM_RESET = 0x01     # Reset the microcontroller
+    SYSTEM_VERSION = 0x02   # Request/report version information
+    SYSTEM_STATUS = 0x03    # Request/report system status
+    SYSTEM_CONFIG = 0x04    # Get/set configuration parameters
+    
     # Button bit masks
     BTN_UP = 0x01       # Bit 0
     BTN_DOWN = 0x02     # Bit 1
@@ -491,3 +498,76 @@ class PamirUartProtocols:
         
         type_flags = packet_bytes[0]
         return type_flags & 0xE0
+    
+    def create_system_ping_packet(self):
+        """Create a system ping packet
+        
+        Returns:
+            bytes: 4-byte ping packet {0xC0, 0x00, 0x00, 0xC0}
+        """
+        type_flags = self.TYPE_SYSTEM | self.SYSTEM_PING
+        return self.create_packet(type_flags, 0x00, 0x00)
+    
+    def parse_system_packet(self, packet_bytes):
+        """Parse system command packet
+        
+        Args:
+            packet_bytes: 4-byte packet to parse
+            
+        Returns:
+            tuple: (valid, system_data) where system_data contains command info
+        """
+        valid, parsed = self.validate_packet(packet_bytes)
+        if not valid:
+            return False, None
+        
+        type_flags, data0, data1, checksum = parsed
+        
+        # Check if this is a system packet
+        if (type_flags & 0xE0) != self.TYPE_SYSTEM:
+            return False, None
+        
+        # Extract system command from 5 LSB
+        command = type_flags & 0x1F
+        
+        # Parse based on command type
+        if command == self.SYSTEM_PING:
+            system_data = {
+                'command': 'ping',
+                'data0': data0,
+                'data1': data1
+            }
+        elif command == self.SYSTEM_RESET:
+            system_data = {
+                'command': 'reset',
+                'mode': data0,
+                'reason': data1
+            }
+        elif command == self.SYSTEM_VERSION:
+            system_data = {
+                'command': 'version',
+                'major': data0,
+                'minor': data1
+            }
+        elif command == self.SYSTEM_STATUS:
+            system_data = {
+                'command': 'status',
+                'status_type': data0,
+                'status_value': data1
+            }
+        elif command == self.SYSTEM_CONFIG:
+            system_data = {
+                'command': 'config',
+                'config_type': data0,
+                'config_value': data1
+            }
+        else:
+            # Unknown system command
+            system_data = {
+                'command': 'unknown',
+                'raw_command': command,
+                'data0': data0,
+                'data1': data1
+            }
+        
+        return True, system_data

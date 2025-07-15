@@ -26,7 +26,8 @@ PYTHON_FILES = [
     "pamir_uart_protocols.py",
     "neopixel_controller.py", 
     "power_manager.py",
-    "battery.py"
+    "battery.py",
+    "main.py"
 ]
 
 # UF2 Files (located in UF2_DIRECTORY)
