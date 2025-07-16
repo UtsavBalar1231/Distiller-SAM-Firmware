@@ -170,8 +170,11 @@ class PamirUartProtocols:
         if execute:
             type_flags |= self.LED_CMD_EXECUTE
 
-        # Add LED ID (bits 3-0)
-        type_flags |= led_id & 0x0F
+        # Add LED mode (bits 3-2)
+        type_flags |= mode & 0x0C
+
+        # Add LED ID (bits 1-0, limited to 0-3 for mode compatibility)
+        type_flags |= led_id & 0x03
 
         # Pack color data: data[0] = RRRRGGGG, data[1] = BBBBTTTT
         data0 = ((r4 & 0x0F) << 4) | (g4 & 0x0F)
@@ -261,7 +264,8 @@ class PamirUartProtocols:
 
         # Extract LED command fields
         execute = bool(type_flags & self.LED_CMD_EXECUTE)
-        led_id = type_flags & 0x0F
+        led_mode = type_flags & 0x0C  # Extract mode bits (bits 3-2)
+        led_id = type_flags & 0x03  # LED ID is bits 1-0 (0-3)
 
         # Extract color data
         r4 = (data0 >> 4) & 0x0F
@@ -272,6 +276,7 @@ class PamirUartProtocols:
         led_data = {
             "execute": execute,
             "led_id": led_id,
+            "led_mode": led_mode,
             "color": (r4, g4, b4),
             "time_value": time_value,
             "delay_ms": (time_value + 1) * 100,

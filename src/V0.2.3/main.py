@@ -166,43 +166,89 @@ button_state_cache = {"up": False, "down": False, "select": False, "power": Fals
 
 
 # Packet processing functions
+
+
 def process_led_packet(packet_data):
-    """Process LED control packet"""
+    """Process LED control packet - directly control debug RGB LED with animation support"""
     valid, led_data = protocol.parse_led_packet(packet_data)
     if valid:
         debug.log_verbose(debug.CAT_LED, f"LED command: {led_data}")
 
-        # Submit LED task
-        def execute_led_command():
-            try:
-                led_id = led_data["led_id"]
-                if led_id == 15:  # Convert protocol LED_ALL to controller format
-                    led_id = 255
+        try:
+            # Extract color data (use 4-bit values directly, no scaling)
+            color = led_data["color"]
+            r = color[0]  # 4-bit value (0-15)
+            g = color[1]  # 4-bit value (0-15)
+            b = color[2]  # 4-bit value (0-15)
+            time_value = led_data["time_value"]
+            led_mode = led_data["led_mode"]
 
-                if led_data.get("execute"):
-                    np_controller.execute_queue()
-                else:
-                    # Determine animation mode
-                    time_value = led_data["time_value"]
-                    if time_value == 0:
-                        mode = np_controller.MODE_STATIC
-                    elif time_value <= 5:
-                        mode = np_controller.MODE_BLINK
-                    elif time_value <= 10:
-                        mode = np_controller.MODE_FADE
-                    else:
-                        mode = np_controller.MODE_RAINBOW
+            # Get LED ID (0-3, all map to the single hardware RGB LED)
+            led_id = led_data["led_id"]
+            
+            # Determine animation mode based on led_mode bits
+            if led_mode == protocol.LED_MODE_STATIC:
+                # Static mode - set color immediately using NeoPixel controller
+                rgb_color = np_controller.rgb444_to_rgb888((r, g, b))
+                np_controller.set_color(rgb_color, index=0)  # Always use index 0 for single LED
+                debug.log_info(
+                    debug.CAT_LED,
+                    f"LED {led_id} set to RGB({r}, {g}, {b}) -> RGB LED updated (static)",
+                )
 
-                    np_controller.add_to_queue(
-                        led_id=led_id,
-                        mode=mode,
-                        color_data=led_data["color"],
-                        time_value=time_value,
-                    )
-            except Exception as e:
-                debug.log_error(debug.CAT_LED, f"LED command failed: {e}")
+            elif led_mode == protocol.LED_MODE_BLINK:
+                # Blink mode
+                debug.log_info(
+                    debug.CAT_LED,
+                    f"LED {led_id} blink mode: RGB({r}, {g}, {b}) time={time_value}",
+                )
 
-        task_manager.submit_led_task("LED_COMMAND", execute_led_command)
+                # Use NeoPixel controller for animation
+                np_controller.stop_animation()
+                np_controller.add_to_queue(0, np_controller.MODE_BLINK, (r, g, b), time_value)
+                np_controller.execute_queue()
+
+            elif led_mode == protocol.LED_MODE_FADE:
+                # Fade mode
+                debug.log_info(
+                    debug.CAT_LED,
+                    f"LED {led_id} fade mode: RGB({r}, {g}, {b}) time={time_value}",
+                )
+
+                # Use NeoPixel controller for animation
+                np_controller.stop_animation()
+                np_controller.add_to_queue(0, np_controller.MODE_FADE, (r, g, b), time_value)
+                np_controller.execute_queue()
+
+            elif led_mode == protocol.LED_MODE_RAINBOW:
+                # Rainbow mode
+                debug.log_info(debug.CAT_LED, f"LED {led_id} rainbow mode: time={time_value}")
+
+                # Use NeoPixel controller for animation
+                np_controller.stop_animation()
+                np_controller.add_to_queue(0, np_controller.MODE_RAINBOW, (0, 0, 0), time_value)
+                np_controller.execute_queue()
+
+            else:
+                # Unknown mode - default to static
+                debug.log_info(
+                    debug.CAT_LED, f"Unknown LED mode: 0x{led_mode:02X}, using static"
+                )
+                rgb_color = np_controller.rgb444_to_rgb888((r, g, b))
+                np_controller.set_color(rgb_color, index=0)
+
+            # Send acknowledgment if needed
+            if led_data.get("execute", False):
+                try:
+                    led_id = led_data["led_id"]
+                    ack_packet = protocol.create_led_completion_packet(led_id, 1)
+                    uart0.write(ack_packet)
+                    debug.log_info(debug.CAT_LED, f"LED ACK sent: {ack_packet.hex()}")
+                except Exception as e:
+                    debug.log_error(debug.CAT_LED, f"LED ACK failed: {e}")
+
+        except Exception as e:
+            debug.log_error(debug.CAT_LED, f"LED command failed: {e}")
     else:
         # Try parsing as acknowledgment
         valid_ack, ack_data = protocol.parse_led_acknowledgment(packet_data)
@@ -409,6 +455,8 @@ def send_boot_notification():
 # UART communication task (runs on Core 1)
 def uart_communication_task():
     """Main UART communication task - runs on Core 1 with highest priority"""
+    global uart_handler  # Make uart_handler accessible in this thread
+
     debug.log_info(debug.CAT_UART, "UART communication task started on Core 1")
     set_debug_color("UART_READY")
 
@@ -446,7 +494,6 @@ def uart_communication_task():
                     debug.log_error(debug.CAT_UART, "Invalid packet received")
 
             # Check UART handler health periodically
-            global current_time
             current_time = utime.ticks_ms()
             if utime.ticks_diff(current_time, last_stats_time) >= stats_interval:
                 uart_stats = uart_handler.get_statistics()
