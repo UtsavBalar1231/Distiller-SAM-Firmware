@@ -420,12 +420,15 @@ class PamirUartProtocols:
 
         type_flags, data0, data1, checksum = parsed
 
-        # Check if this is a power packet
-        if (type_flags & 0xE0) != self.TYPE_POWER:
+        # Check if this is a power packet or special POWER_CMD_REQUEST_METRICS
+        if (type_flags & 0xE0) == self.TYPE_POWER:
+            # Standard power packet - extract power command from 5 LSB
+            command = type_flags & 0x1F
+        elif type_flags == self.POWER_CMD_REQUEST_METRICS:
+            # Special case: POWER_CMD_REQUEST_METRICS is a complete packet type (0x80)
+            command = self.POWER_CMD_REQUEST_METRICS
+        else:
             return False, None
-
-        # Extract power command from 5 LSB
-        command = type_flags & 0x1F
 
         # Parse based on command type
         if command == self.POWER_CMD_QUERY:

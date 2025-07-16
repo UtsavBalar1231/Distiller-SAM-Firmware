@@ -370,6 +370,10 @@ def process_uart_packet(packet_data):
     elif packet_type == protocol.TYPE_POWER:
         debug.log_info(debug.CAT_POWER, f"Processing POWER packet: {packet_data.hex()}")
         process_power_packet(packet_data)
+    elif packet_data[0] == protocol.POWER_CMD_REQUEST_METRICS:
+        # Special case: POWER_CMD_REQUEST_METRICS (0x80) is a complete packet type
+        debug.log_info(debug.CAT_POWER, f"Processing POWER_CMD_REQUEST_METRICS packet: {packet_data.hex()}")
+        process_power_packet(packet_data)
     elif packet_type == protocol.TYPE_SYSTEM:
         debug.log_info(
             debug.CAT_SYSTEM, f"Processing SYSTEM packet: {packet_data.hex()}"
