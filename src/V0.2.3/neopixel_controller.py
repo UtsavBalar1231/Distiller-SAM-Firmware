@@ -1,16 +1,14 @@
-# Author: PamirAI
-# Date: 2025-07-13
-# Version: 0.2.3
-# Description: NeoPixel controller for Pamir SAM with animation support
+"""NeoPixel controller for Pamir SAM with animation support"""
 
+# pylint: disable=import-error,broad-exception-caught
+import _thread
 import machine
 import neopixel
 import utime
-import _thread
-import math
 
 
 class NeoPixelController:
+    """Controller for NeoPixel LEDs with animation capabilities"""
 
     # Animation modes
     MODE_STATIC = 0
@@ -20,7 +18,7 @@ class NeoPixelController:
     MODE_SEQUENCE = 4
 
     def __init__(
-        self, pin=20, num_leds=1, default_brightness=0.5, completion_callback=None
+        self, pin=7, num_leds=7, default_brightness=0.5, completion_callback=None
     ):
         self.pin = pin
         self.num_leds = num_leds
@@ -67,7 +65,7 @@ class NeoPixelController:
             b = int(color[2] * self.np.brightness)
 
             if index is None:
-                for i in range(len(self.np)):
+                for i, _ in enumerate(self.np):
                     self.np[i] = (r, g, b)
             else:
                 if 0 <= index < len(self.np):
@@ -114,15 +112,65 @@ class NeoPixelController:
         self.animation_queue.append(command)
 
     def execute_queue(self):
-        """Execute all queued LED commands in sequence"""
+        """Execute all queued LED commands in sequence (non-blocking)"""
         if not self.animation_queue:
             return
 
         # Stop any current animation
         self.stop_animation()
 
-        # Start new animation thread
-        _thread.start_new_thread(self._execute_animation_thread, ())
+        # Execute immediately without threading to avoid core1 conflict
+        self._execute_animation_immediate()
+
+    def _execute_animation_immediate(self):
+        """Execute animation queue immediately without threading"""
+        self.animation_running = True
+        executed_commands = 0
+        last_led_id = 0
+
+        try:
+            for command in self.animation_queue:
+                if not self.animation_running:
+                    break
+
+                led_id = command["led_id"]
+                mode = command["mode"]
+                color = command["color"]
+                delay_ms = command["delay_ms"]
+                last_led_id = led_id
+
+                if mode == self.MODE_STATIC:
+                    self._animate_static(led_id, color)
+                elif mode == self.MODE_BLINK:
+                    self._animate_blink_quick(led_id, color, delay_ms)
+                elif mode == self.MODE_FADE:
+                    self._animate_fade_quick(led_id, color, delay_ms)
+                elif mode == self.MODE_RAINBOW:
+                    self._animate_rainbow_quick(led_id, delay_ms)
+                elif mode == self.MODE_SEQUENCE:
+                    self._animate_sequence(led_id, color, delay_ms)
+
+                executed_commands += 1
+                # Small delay between commands
+                utime.sleep_ms(10)
+
+        except Exception as e:
+            print(f"Animation error: {e}")
+        finally:
+            self.animation_running = False
+
+            # Store completion info for acknowledgment
+            self.last_executed_led_id = last_led_id
+            self.last_sequence_length = executed_commands
+
+            # Send completion acknowledgment if callback is set
+            if self.completion_callback and executed_commands > 0:
+                try:
+                    self.completion_callback(last_led_id, executed_commands)
+                except Exception as e:
+                    print(f"Completion callback error: {e}")
+
+            self.animation_queue.clear()
 
     def _execute_animation_thread(self):
         """Thread function to execute animation queue"""
@@ -284,6 +332,100 @@ class NeoPixelController:
         b = int((b + m) * 255)
 
         return [r, g, b]
+
+    def _animate_blink_quick(self, led_id, color, delay_ms):
+        """Quick blink animation - blink a few times"""
+        blink_count = 3  # Number of blinks
+        on_time = min(delay_ms // 2, 200)  # Time LED is on
+        off_time = min(delay_ms // 2, 200)  # Time LED is off
+        
+        for i in range(blink_count):
+            if not self.animation_running:
+                break
+                
+            # Turn on
+            if led_id == 255:
+                self.set_color(color)
+            else:
+                self.set_color(color, index=led_id)
+            utime.sleep_ms(on_time)
+            
+            # Turn off
+            if led_id == 255:
+                self.set_color([0, 0, 0])
+            else:
+                self.set_color([0, 0, 0], index=led_id)
+            utime.sleep_ms(off_time)
+        
+        # Leave LED on at the end
+        if led_id == 255:
+            self.set_color(color)
+        else:
+            self.set_color(color, index=led_id)
+
+    def _animate_fade_quick(self, led_id, color, delay_ms):
+        """Quick fade animation - fade in and out"""
+        steps = 10  # Number of fade steps
+        step_delay = min(delay_ms // (steps * 2), 50)  # Delay per step
+        
+        # Fade in
+        for i in range(steps):
+            if not self.animation_running:
+                break
+                
+            brightness = (i + 1) / steps
+            faded_color = [int(c * brightness) for c in color]
+            
+            if led_id == 255:
+                self.set_color(faded_color)
+            else:
+                self.set_color(faded_color, index=led_id)
+            utime.sleep_ms(step_delay)
+        
+        # Fade out
+        for i in range(steps):
+            if not self.animation_running:
+                break
+                
+            brightness = (steps - i) / steps
+            faded_color = [int(c * brightness) for c in color]
+            
+            if led_id == 255:
+                self.set_color(faded_color)
+            else:
+                self.set_color(faded_color, index=led_id)
+            utime.sleep_ms(step_delay)
+        
+        # Leave LED on at the end
+        if led_id == 255:
+            self.set_color(color)
+        else:
+            self.set_color(color, index=led_id)
+
+    def _animate_rainbow_quick(self, led_id, delay_ms):
+        """Quick rainbow animation - show a few colors"""
+        colors = [
+            [255, 0, 0],    # Red
+            [255, 127, 0],  # Orange
+            [255, 255, 0],  # Yellow
+            [0, 255, 0],    # Green
+            [0, 0, 255],    # Blue
+            [75, 0, 130],   # Indigo
+            [148, 0, 211]   # Violet
+        ]
+        
+        step_delay = max(10, delay_ms // len(colors))
+        
+        for color in colors:
+            if not self.animation_running:
+                break
+                
+            if led_id == 255:
+                self.set_color(color)
+            else:
+                self.set_color(color, index=led_id)
+            utime.sleep_ms(step_delay)
+
 
     def get_status(self):
         """Get current LED controller status

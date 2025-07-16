@@ -1,9 +1,14 @@
-import machine
+"""Battery Management System for TI's BQ27441-G1A fuel gauge IC."""
+
+# pylint: disable=import-error,invalid-name
 import struct
 import time
+import machine
 
 
 class BQ27441:
+    """BQ27441 Battery Management System class for TI's BQ27441-G1A fuel gauge IC."""
+
     def __init__(self, i2c=None, address=0x55):
         self.i2c = i2c or machine.I2C(0, sda=machine.Pin(24), scl=machine.Pin(25))
         self.addr = address
@@ -24,6 +29,7 @@ class BQ27441:
 
     # ---------- standard-command wrapper ----------
     def control(self, subcmd):
+        """Send a standard command to the BQ27441."""
         self._wr_word(0x00, subcmd)  # send
         return self._rd_word(0x00)  # read back
 
@@ -36,8 +42,8 @@ class BQ27441:
     # ---------- CONFIG-UPDATE helpers ----------
     def _enter_cfgupdate(self):
         self.control(0x0013)  # SET_CFGUPDATE
-        while not (self._rd_word(0x06) & 0x0010):  # Flags()[CFGUPMODE]
-            time.sleep_ms(10)
+        while not self._rd_word(0x06) & 0x0010:  # Flags()[CFGUPMODE]
+            time.sleep_ms(10)  # pylint: disable=no-member
 
     def _exit_cfgupdate(self):
         self.control(0x0042)  # SOFT_RESET; exits + resimulates
@@ -104,15 +110,19 @@ class BQ27441:
         self.control(0x000C)  # BAT_INSERT
 
     def remain_capacity(self):
+        """Get the remaining capacity in mAh."""
         return self._rd_word(0x1C)
 
     def voltage_V(self):
+        """Get the battery voltage in volts."""
         return self._rd_word(0x04) / 1000
 
     def temp_C(self):
+        """Get the battery temperature in degrees Celsius."""
         return self._rd_word(0x02) * 0.1 - 273.15
 
     def avg_current_mA(self):
+        """Get the average current in milliamperes."""
         raw = self._rd_word(0x10)
         return raw - 0x10000 if raw & 0x8000 else raw
 

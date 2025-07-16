@@ -1,7 +1,4 @@
-# Author: PamirAI
-# Date: 2025-07-13
-# Version: 0.2.3
-# Description: Pamir SAM UART Protocol implementation for RP2040
+"""Pamir SAM UART Protocol implementation for RP2040"""
 
 import struct
 
@@ -173,8 +170,14 @@ class PamirUartProtocols:
         if execute:
             type_flags |= self.LED_CMD_EXECUTE
 
-        # Add LED ID (bits 3-0)
-        type_flags |= led_id & 0x0F
+        # Encoding scheme depends on LED ID range
+        if led_id <= 3:
+            # Legacy encoding: mode in bits 3-2, LED ID in bits 1-0
+            type_flags |= mode & 0x0C  # Add LED mode (bits 3-2)
+            type_flags |= led_id & 0x03  # Add LED ID (bits 1-0)
+        else:
+            # Extended encoding: LED ID in full 4 bits (4-15), mode is ignored
+            type_flags |= led_id & 0x0F  # Use full 4 bits for LED ID
 
         # Pack color data: data[0] = RRRRGGGG, data[1] = BBBBTTTT
         data0 = ((r4 & 0x0F) << 4) | (g4 & 0x0F)
@@ -264,7 +267,25 @@ class PamirUartProtocols:
 
         # Extract LED command fields
         execute = bool(type_flags & self.LED_CMD_EXECUTE)
-        led_id = type_flags & 0x0F
+        
+        if execute:
+            # For execute packets (acknowledgments), use full 4 bits for LED ID
+            led_id = type_flags & 0x0F
+            led_mode = 0  # Execute packets don't encode mode
+        else:
+            # For command packets, determine encoding based on lower 4 bits value
+            lower_4bits = type_flags & 0x0F
+            
+            # If lower 4 bits <= 3, use legacy encoding (mode + LED ID)
+            # If lower 4 bits >= 4, use extended encoding (LED ID only, static mode)
+            if lower_4bits <= 3:
+                # Legacy encoding: mode in bits 3-2, LED ID in bits 1-0
+                led_mode = type_flags & 0x0C  # Extract mode bits (bits 3-2)
+                led_id = type_flags & 0x03    # LED ID is bits 1-0 (0-3)
+            else:
+                # Extended encoding: full 4 bits for LED ID, default to static mode
+                led_id = lower_4bits  # LED ID 4-15
+                led_mode = self.LED_MODE_STATIC  # Default to static mode
 
         # Extract color data
         r4 = (data0 >> 4) & 0x0F
@@ -275,6 +296,7 @@ class PamirUartProtocols:
         led_data = {
             "execute": execute,
             "led_id": led_id,
+            "led_mode": led_mode,
             "color": (r4, g4, b4),
             "time_value": time_value,
             "delay_ms": (time_value + 1) * 100,
@@ -418,12 +440,15 @@ class PamirUartProtocols:
 
         type_flags, data0, data1, checksum = parsed
 
-        # Check if this is a power packet
-        if (type_flags & 0xE0) != self.TYPE_POWER:
+       # Check if this is a power packet or special POWER_CMD_REQUEST_METRICS
+        if (type_flags & 0xE0) == self.TYPE_POWER:
+            # Standard power packet - extract power command from 5 LSB
+            command = type_flags & 0x1F
+        elif type_flags == self.POWER_CMD_REQUEST_METRICS:
+            # Special case: POWER_CMD_REQUEST_METRICS is a complete packet type (0x80)
+            command = self.POWER_CMD_REQUEST_METRICS
+        else:
             return False, None
-
-        # Extract power command from 5 LSB
-        command = type_flags & 0x1F
 
         # Parse based on command type
         if command == self.POWER_CMD_QUERY:

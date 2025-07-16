@@ -29,9 +29,8 @@ PYTHON_FILES = [
     "neopixel_controller.py",
     "power_manager.py",
     "battery.py",
-    "uart_monitor.py",
     "debug_handler.py",
-    "improved_uart_handler.py",
+    "uart_handler.py",
     "threaded_task_manager.py",
     "main.py",
 ]
