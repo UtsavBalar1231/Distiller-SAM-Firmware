@@ -1,7 +1,4 @@
-# Author: PamirAI
-# Date: 2025-07-13
-# Version: 0.2.3
-# Description: Pamir SAM UART Protocol implementation for RP2040
+"""Pamir SAM UART Protocol implementation for RP2040"""
 
 import struct
 

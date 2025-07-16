@@ -1,15 +1,13 @@
-# Author: PamirAI
-# Date: 2025-07-13
-# Version: 0.2.3
-# Description: Power Management Controller for Pamir SAM with BQ27441 integration
+"""Power Management Controller for Pamir SAM with BQ27441 integration"""
 
-import machine
-import utime
+# pylint: disable=import-error,broad-exception-caught,global-statement,invalid-name
 import _thread
+import machine
 from battery import BQ27441
 
 
 class PowerManager:
+    """Power Manager for Pamir SAM with BQ27441 battery management IC"""
 
     def __init__(self, design_capacity_mah=3000, debug_enabled=True):
         """Initialize Power Manager with BQ27441 battery management IC

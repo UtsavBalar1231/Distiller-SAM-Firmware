@@ -1,16 +1,14 @@
-# Author: PamirAI
-# Date: 2025-07-13
-# Version: 0.2.3
-# Description: NeoPixel controller for Pamir SAM with animation support
+"""NeoPixel controller for Pamir SAM with animation support"""
 
+# pylint: disable=import-error,broad-exception-caught
+import _thread
 import machine
 import neopixel
 import utime
-import _thread
-import math
 
 
 class NeoPixelController:
+    """Controller for NeoPixel LEDs with animation capabilities"""
 
     # Animation modes
     MODE_STATIC = 0
@@ -67,7 +65,7 @@ class NeoPixelController:
             b = int(color[2] * self.np.brightness)
 
             if index is None:
-                for i in range(len(self.np)):
+                for i, _ in enumerate(self.np):
                     self.np[i] = (r, g, b)
             else:
                 if 0 <= index < len(self.np):
@@ -309,7 +307,10 @@ class NeoPixelController:
             try:
                 color_data = colors[str(seq_num)]
                 if len(color_data) >= 5:
-                    r, g, b, brightness, delay = color_data
+                    r, g, b, brightness, delay = (
+                        color_data  # pylint: disable=unused-variable
+                    )
+                    # TODO: bightness handling if needed
                     # Convert to new format
                     self.add_to_queue(
                         led_id=0,  # Always LED 0 for legacy

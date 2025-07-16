@@ -1,8 +1,7 @@
+"""Driver for EPD Display"""
+
 import machine
 import utime
-
-# TODO unblock the eink await
-
 
 class einkDSP_SAM:
 
