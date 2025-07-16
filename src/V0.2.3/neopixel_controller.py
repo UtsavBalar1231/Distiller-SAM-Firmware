@@ -426,48 +426,6 @@ class NeoPixelController:
                 self.set_color(color, index=led_id)
             utime.sleep_ms(step_delay)
 
-    def handle_legacy_sequence(self, data):
-        """Handle legacy JSON sequence format for backward compatibility
-
-        Args:
-            data: Dictionary with 'colors' key containing sequence data
-        """
-        if not isinstance(data, dict) or "colors" not in data:
-            print("Invalid data format or missing 'colors' key")
-            return
-
-        # Stop current animation
-        self.stop_animation()
-
-        # Clear queue and add legacy sequence
-        self.animation_queue.clear()
-        colors = data.get("colors", {})
-
-        # Sort sequence numbers and add to queue
-        sequence_numbers = sorted([int(k) for k in colors.keys()])
-
-        for seq_num in sequence_numbers:
-            try:
-                color_data = colors[str(seq_num)]
-                if len(color_data) >= 5:
-                    r, g, b, brightness, delay = (
-                        color_data  # pylint: disable=unused-variable
-                    )
-                    # TODO: bightness handling if needed
-                    # Convert to new format
-                    self.add_to_queue(
-                        led_id=0,  # Always LED 0 for legacy
-                        mode=self.MODE_STATIC,
-                        color_data=(r // 17, g // 17, b // 17),  # Convert to 4-bit
-                        time_value=min(
-                            15, max(0, int(delay * 10) - 1)
-                        ),  # Convert delay
-                    )
-            except (ValueError, IndexError) as e:
-                print(f"Error processing legacy sequence {seq_num}: {e}")
-
-        # Execute the queue
-        self.execute_queue()
 
     def get_status(self):
         """Get current LED controller status

@@ -11,6 +11,9 @@ from pamir_uart_protocols import PamirUartProtocols
 from neopixel_controller import NeoPixelController
 from power_manager import PowerManager
 
+# KEEP THIS LINE FIRST LINE OF THE FILE
+pmic_enable = machine.Pin(3, machine.Pin.IN, pull=None)
+
 # Configuration
 PRODUCTION = False  # Set to True for production builds
 INITIAL_DEBUG_LEVEL = (
@@ -21,7 +24,8 @@ INITIAL_DEBUG_LEVEL = (
 UART_BAUDRATE = 115200
 UART_TX_PIN = 0
 UART_RX_PIN = 1
-LED_PIN = 20
+DEBUG_LED_PIN = 20
+LED_BAR_PIN = 6
 BUTTON_DEBOUNCE_MS = 50
 
 # Initialize global components
@@ -44,11 +48,10 @@ einkMux = machine.Pin(22, machine.Pin.OUT)
 sam_interrupt = machine.Pin(2, machine.Pin.OUT)
 
 # USB switch configuration
-pmic_enable = machine.Pin(3, machine.Pin.IN, pull=None)
 usb_switch_s = machine.Pin(23, machine.Pin.OUT, value=0)
 
 # Debug RGB LED
-debug_rgb = neopixel.NeoPixel(machine.Pin(LED_PIN), 1)
+debug_rgb = neopixel.NeoPixel(machine.Pin(DEBUG_LED_PIN), 1)
 
 DEBUG_COLORS = {
     "OFF": (0, 0, 0),
@@ -88,7 +91,7 @@ def switch_usb(usb_type):
 
 # Initialize components
 set_debug_color("INIT")
-debug.log_info(debug.CAT_SYSTEM, "=== RP2040 SAM Firmware v1.0.0 Starting ===")
+debug.log_info(debug.CAT_SYSTEM, "=== RP2040 SAM Firmware v0.2.3 Starting ===")
 
 # USB switch setup
 switch_usb("SOM_USB")
@@ -148,8 +151,8 @@ def led_completion_callback(led_id, sequence_length):
 
 # Initialize NeoPixel controller
 np_controller = NeoPixelController(
-    pin=LED_PIN,
-    num_leds=1,
+    pin=LED_BAR_PIN,
+    num_leds=7,
     default_brightness=0.5,
     completion_callback=led_completion_callback,
 )
