@@ -395,7 +395,7 @@ def get_button_states():
     }
 
 
-def button_interrupt_handler():
+def button_interrupt_handler(pin):
     """button interrupt handler"""
     try:
         # Brief delay for hardware settling
