@@ -91,6 +91,8 @@ class PowerManager:
             import utime
             time_sec = utime.time()
             synthetic_current = 250 + int(50 * (0.5 + 0.3 * ((time_sec % 60) / 60)))
+            if self.debug_enabled:
+                print(f"[PowerManager] Sending synthetic current: {synthetic_current} mA")
             return synthetic_current
             
         current_ma = self._read_sensor_safe(lambda: self.bq27441.avg_current_mA(), "Current", 0)
@@ -100,6 +102,8 @@ class PowerManager:
             import utime
             time_sec = utime.time()
             current_ma = 250 + int(50 * (0.5 + 0.3 * ((time_sec % 60) / 60)))
+            if self.debug_enabled:
+                print(f"[PowerManager] Sensor failed, sending synthetic current: {current_ma} mA")
 
         # Cache the value for backup
         self.cached_current_ma = current_ma
@@ -117,6 +121,8 @@ class PowerManager:
             time_sec = utime.time()
             base_battery = 80 - int((time_sec % 3600) / 180)  # Decline 1% every 3 minutes
             synthetic_battery = max(60, min(90, base_battery))
+            if self.debug_enabled:
+                print(f"[PowerManager] Sending synthetic battery: {synthetic_battery}%")
             return synthetic_battery
 
         # Read remaining capacity in mAh
@@ -129,7 +135,10 @@ class PowerManager:
             import utime
             time_sec = utime.time()
             base_battery = 80 - int((time_sec % 3600) / 180)  # Decline 1% every 3 minutes
-            return max(60, min(90, base_battery))
+            synthetic_battery = max(60, min(90, base_battery))
+            if self.debug_enabled:
+                print(f"[PowerManager] Sensor failed, sending synthetic battery: {synthetic_battery}%")
+            return synthetic_battery
 
         # Convert to percentage based on design capacity
         try:
@@ -149,7 +158,10 @@ class PowerManager:
             import utime
             time_sec = utime.time()
             base_battery = 80 - int((time_sec % 3600) / 180)
-            return max(60, min(90, base_battery))
+            synthetic_battery = max(60, min(90, base_battery))
+            if self.debug_enabled:
+                print(f"[PowerManager] Calculation failed, sending synthetic battery: {synthetic_battery}%")
+            return synthetic_battery
 
     def get_temperature_0_1c(self):
         """Get temperature in 0.1°C resolution from BQ27441
@@ -164,16 +176,21 @@ class PowerManager:
             time_sec = utime.time()
             base_temp = 250 + int(50 * (0.5 + 0.5 * ((time_sec % 30) / 30)))
             synthetic_temp = max(200, min(350, base_temp))
+            if self.debug_enabled:
+                print(f"[PowerManager] Sending synthetic temperature: {synthetic_temp/10:.1f}°C")
             return synthetic_temp
 
-        temp_celsius = self._read_sensor_safe(self.bq27441.temp_C, "Temperature", 0.0)
+        temp_celsius = self._read_sensor_safe(lambda: self.bq27441.temp_C(), "Temperature", 0.0)
 
         if temp_celsius == 0.0:
             # Generate synthetic temperature data if sensor read failed
             import utime
             time_sec = utime.time()
             base_temp = 250 + int(50 * (0.5 + 0.5 * ((time_sec % 30) / 30)))
-            return max(200, min(350, base_temp))
+            synthetic_temp = max(200, min(350, base_temp))
+            if self.debug_enabled:
+                print(f"[PowerManager] Sensor failed, sending synthetic temperature: {synthetic_temp/10:.1f}°C")
+            return synthetic_temp
 
         # Convert to 0.1°C resolution
         try:
@@ -190,7 +207,10 @@ class PowerManager:
             import utime
             time_sec = utime.time()
             base_temp = 250 + int(50 * (0.5 + 0.5 * ((time_sec % 30) / 30)))
-            return max(200, min(350, base_temp))
+            synthetic_temp = max(200, min(350, base_temp))
+            if self.debug_enabled:
+                print(f"[PowerManager] Conversion failed, sending synthetic temperature: {synthetic_temp/10:.1f}°C")
+            return synthetic_temp
 
     def get_voltage_mv(self):
         """Get voltage in millivolts from BQ27441
@@ -205,16 +225,21 @@ class PowerManager:
             time_sec = utime.time()
             base_voltage = 3700 + int(300 * (0.5 + 0.3 * ((time_sec % 45) / 45)))
             synthetic_voltage = max(3300, min(4200, base_voltage))
+            if self.debug_enabled:
+                print(f"[PowerManager] Sending synthetic voltage: {synthetic_voltage/1000:.2f}V")
             return synthetic_voltage
 
-        voltage_v = self._read_sensor_safe(self.bq27441.voltage_V, "Voltage", 0.0)
+        voltage_v = self._read_sensor_safe(lambda: self.bq27441.voltage_V(), "Voltage", 0.0)
 
         if voltage_v == 0.0:
             # Generate synthetic voltage data if sensor read failed
             import utime
             time_sec = utime.time()
             base_voltage = 3700 + int(300 * (0.5 + 0.3 * ((time_sec % 45) / 45)))
-            return max(3300, min(4200, base_voltage))
+            synthetic_voltage = max(3300, min(4200, base_voltage))
+            if self.debug_enabled:
+                print(f"[PowerManager] Sensor failed, sending synthetic voltage: {synthetic_voltage/1000:.2f}V")
+            return synthetic_voltage
 
         # Convert to millivolts
         try:
@@ -231,7 +256,10 @@ class PowerManager:
             import utime
             time_sec = utime.time()
             base_voltage = 3700 + int(300 * (0.5 + 0.3 * ((time_sec % 45) / 45)))
-            return max(3300, min(4200, base_voltage))
+            synthetic_voltage = max(3300, min(4200, base_voltage))
+            if self.debug_enabled:
+                print(f"[PowerManager] Conversion failed, sending synthetic voltage: {synthetic_voltage/1000:.2f}V")
+            return synthetic_voltage
 
     def get_all_metrics(self):
         """Get all power metrics in one call
