@@ -333,6 +333,13 @@ def process_power_packet(packet_data):
             except Exception as e:
                 debug.log_error(debug.CAT_POWER, f"Power command failed: {e}")
 
+        # Execute power command immediately to avoid task manager threading issues
+        try:
+            execute_power_command()
+        except Exception as e:
+            debug.log_error(debug.CAT_POWER, f"Immediate power command execution failed: {e}")
+            
+        # Also submit to task manager for statistics
         task_manager.submit_task(
             "POWER_COMMAND", execute_power_command, priority=task_manager.PRIORITY_HIGH
         )
