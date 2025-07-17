@@ -605,3 +605,72 @@ class PamirUartProtocols:
             }
 
         return True, system_data
+
+    # ==================== DISPLAY CONTROL PROTOCOL ====================
+
+    def create_display_status_packet(self, status_code, data_value=0x00):
+        """Create display status packet FROM RP2040 TO SoM
+
+        Args:
+            status_code: Display status code
+            data_value: Additional status data
+
+        Returns:
+            bytes: 4-byte packet ready for UART transmission
+        """
+        type_flags = self.TYPE_DISPLAY | 0x01  # Display status report
+        return self.create_packet(type_flags, status_code, data_value)
+
+    def create_display_completion_packet(self):
+        """Create display refresh completion packet FROM RP2040 TO SoM
+
+        Returns:
+            bytes: 4-byte packet ready for UART transmission
+        """
+        type_flags = self.TYPE_DISPLAY | 0x01  # Display refresh completion
+        return self.create_packet(type_flags, 0xFF, 0x00)  # 0xFF = completion indicator
+
+    def parse_display_packet(self, packet_bytes):
+        """Parse display packet and return display command data
+
+        Args:
+            packet_bytes: 4-byte packet from UART
+
+        Returns:
+            tuple: (valid, display_data) where display_data contains command info
+        """
+        valid, parsed = self.validate_packet(packet_bytes)
+        if not valid:
+            return False, None
+
+        type_flags, data0, data1, checksum = parsed
+
+        # Check if this is a display packet
+        if (type_flags & 0xE0) != self.TYPE_DISPLAY:
+            return False, None
+
+        # Extract display command from lower 5 bits
+        command = type_flags & 0x1F
+
+        if command == 0x07:
+            # Display release command from SoM
+            if data0 == 0xFF:
+                display_data = {"command": "release", "signal": data0}
+            else:
+                display_data = {"command": "unknown_release", "data0": data0, "data1": data1}
+        elif command == 0x01:
+            # Display status or completion
+            if data0 == 0xFF:
+                display_data = {"command": "completion", "data1": data1}
+            else:
+                display_data = {"command": "status", "status_code": data0, "data1": data1}
+        else:
+            # Unknown display command
+            display_data = {
+                "command": "unknown",
+                "raw_command": command,
+                "data0": data0,
+                "data1": data1,
+            }
+
+        return True, display_data

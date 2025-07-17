@@ -167,6 +167,7 @@ debug.log_info(debug.CAT_SYSTEM, "Hardware initialization complete")
 
 # Global state
 button_state_cache = {"up": False, "down": False, "select": False, "power": False}
+display_release_received = False  # Flag to track display release signal
 
 
 # Packet processing functions
@@ -369,6 +370,34 @@ def process_system_packet(packet_data):
             )
 
 
+def process_display_packet(packet_data):
+    """Process display control packet"""
+    valid, display_data = protocol.parse_display_packet(packet_data)
+    if valid:
+        debug.log_verbose(debug.CAT_DISPLAY, f"Display command: {display_data}")
+
+        if display_data["command"] == "release":
+            global display_release_received
+            display_release_received = True
+            debug.log_info(debug.CAT_DISPLAY, "Display release signal received - Pi has booted")
+            
+            # Send acknowledgment
+            def send_display_ack():
+                try:
+                    ack_packet = protocol.create_display_completion_packet()
+                    uart0.write(ack_packet)
+                    debug.log_info(
+                        debug.CAT_DISPLAY,
+                        f"Display release ACK sent -> TX: {ack_packet.hex()}",
+                    )
+                except Exception as e:
+                    debug.log_error(debug.CAT_DISPLAY, f"Display release ACK failed: {e}")
+
+            task_manager.submit_task(
+                "DISPLAY_RELEASE_ACK", send_display_ack, priority=task_manager.PRIORITY_HIGH
+            )
+
+
 def process_uart_packet(packet_data):
     """Process received UART packet"""
     packet_type = protocol.get_packet_type(packet_data)
@@ -384,6 +413,11 @@ def process_uart_packet(packet_data):
         # Special case: POWER_CMD_REQUEST_METRICS (0x80) is a complete packet type
         debug.log_info(debug.CAT_POWER, f"Processing POWER_CMD_REQUEST_METRICS packet: {packet_data.hex()}")
         process_power_packet(packet_data)
+    elif packet_type == protocol.TYPE_DISPLAY:
+        debug.log_info(
+            debug.CAT_DISPLAY, f"Processing DISPLAY packet: {packet_data.hex()}"
+        )
+        process_display_packet(packet_data)
     elif packet_type == protocol.TYPE_SYSTEM:
         debug.log_info(
             debug.CAT_SYSTEM, f"Processing SYSTEM packet: {packet_data.hex()}"
@@ -546,9 +580,11 @@ task_manager.submit_uart_task("UART_COMMUNICATION", uart_communication_task)
 
 # E-ink display task (high priority, blocking)
 def eink_display_task():
-    """E-ink display animation task - runs with high priority"""
+    """E-ink display animation task - runs with high priority until Pi boots"""
+    global display_release_received
+    
     try:
-        debug.log_info(debug.CAT_DISPLAY, "Starting E-ink display task")
+        debug.log_info(debug.CAT_DISPLAY, "Starting E-ink display task - waiting for Pi boot")
 
         # Import and initialize E-ink 
         from eink_driver_sam import einkDSP_SAM
@@ -575,29 +611,55 @@ def eink_display_task():
             with open("./loading2.bin", "rb") as f:
                 image2_data = f.read()
 
-            # Animate for a few cycles
-            for cycle in range(3):
+            # Animation loop - continue until display release signal received
+            cycle = 0
+            while not display_release_received:
+                # Animate between frames
                 eink.epd_display_part_all(image2_data)
-                utime.sleep_ms(100)
-                eink.epd_display_part_all(base_image)
-                utime.sleep_ms(100)
-
-                # Yield to other tasks periodically
-                if cycle % 1 == 0:
+                
+                # Check for release signal during animation
+                for i in range(10):  # Check 10 times during 100ms delay
+                    if display_release_received:
+                        break
                     utime.sleep_ms(10)
+                
+                if display_release_received:
+                    break
+                    
+                eink.epd_display_part_all(base_image)
+                
+                # Check for release signal during animation
+                for i in range(10):  # Check 10 times during 100ms delay
+                    if display_release_received:
+                        break
+                    utime.sleep_ms(10)
+                
+                cycle += 1
+                
+                # Yield to other tasks periodically
+                if cycle % 5 == 0:
+                    utime.sleep_ms(50)
+                    debug.log_info(debug.CAT_DISPLAY, f"Animation cycle {cycle} - waiting for Pi boot")
 
         except OSError:
             set_debug_color("ERROR")
             debug.log_error(debug.CAT_DISPLAY, "Animation files not found")
 
-        eink.de_init()
-        einkMux.low()
-        debug.log_info(debug.CAT_DISPLAY, "E-ink display task completed")
+        # Release eink control when Pi has booted
+        debug.log_info(debug.CAT_DISPLAY, "Pi boot detected - releasing eink control")
+        eink.de_init()  # Release GPIO on RP2040 and set to high Z
+        einkMux.low()   # Reroute eink communication to Raspberry Pi
+        debug.log_info(debug.CAT_DISPLAY, "E-ink display task completed - control handed to Pi")
 
     except Exception as e:
         set_debug_color("ERROR")
         debug.log_error(debug.CAT_DISPLAY, f"E-ink task failed: {e}")
-        einkMux.low()
+        # Ensure eink is released even on error
+        try:
+            eink.de_init()
+            einkMux.low()
+        except:
+            pass
 
 
 # Run E-ink task directly on core 0 (blocking)
