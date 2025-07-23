@@ -313,6 +313,7 @@ def process_power_packet(packet_data):
 
                 elif cmd_type == "request_metrics":
                     metrics = power_manager.get_all_metrics()
+                    metric_count = 0
 
                     # Send all metrics
                     for metric_type, value in [
@@ -325,8 +326,14 @@ def process_power_packet(packet_data):
                             metric_type, value
                         )
                         uart0.write(packet)
+                        metric_count += 1
+                        utime.sleep_ms(5)  # Small delay between metrics
 
-                    debug.log_info(debug.CAT_POWER, f"Metrics sent: {metrics}")
+                    # Send metrics complete notification
+                    complete_packet = protocol.create_power_metrics_complete_packet()
+                    uart0.write(complete_packet)
+
+                    debug.log_info(debug.CAT_POWER, f"Metrics sent: {metrics} ({metric_count} packets)")
 
             except Exception as e:
                 debug.log_error(debug.CAT_POWER, f"Power command failed: {e}")
@@ -350,7 +357,6 @@ def process_system_packet(packet_data):
         debug.log_verbose(debug.CAT_SYSTEM, f"System command: {system_data}")
 
         if system_data["command"] == "ping":
-
             def send_ping_response():
                 try:
                     ping_response = protocol.create_system_ping_packet()
@@ -365,6 +371,365 @@ def process_system_packet(packet_data):
             task_manager.submit_task(
                 "PING_RESPONSE", send_ping_response, priority=task_manager.PRIORITY_HIGH
             )
+
+        elif system_data["command"] == "version_request":
+            def send_version_response():
+                try:
+                    version_response = protocol.create_firmware_version_packet()
+                    uart0.write(version_response)
+                    debug.log_info(
+                        debug.CAT_SYSTEM,
+                        f"Version response sent -> TX: {version_response.hex()}",
+                    )
+                except Exception as e:
+                    debug.log_error(debug.CAT_SYSTEM, f"Version response failed: {e}")
+
+            task_manager.submit_task(
+                "VERSION_RESPONSE", send_version_response, priority=task_manager.PRIORITY_HIGH
+            )
+
+        elif system_data["command"] == "reset":
+            reset_type = system_data.get("reset_type", 0)
+            reason = system_data.get("reason", 0)
+            debug.log_info(debug.CAT_SYSTEM, f"Reset command received: type={reset_type}, reason={reason}")
+            
+            def execute_reset():
+                try:
+                    # Send acknowledgment before reset
+                    ack_packet = protocol.create_system_status_packet(protocol.STATUS_OK, 0x00)
+                    uart0.write(ack_packet)
+                    debug.log_info(debug.CAT_SYSTEM, "Reset acknowledgment sent")
+                    
+                    # Brief delay then reset
+                    utime.sleep_ms(100)
+                    machine.reset()
+                except Exception as e:
+                    debug.log_error(debug.CAT_SYSTEM, f"Reset execution failed: {e}")
+
+            task_manager.submit_task(
+                "SYSTEM_RESET", execute_reset, priority=task_manager.PRIORITY_CRITICAL
+            )
+
+        elif system_data["command"] == "status_request":
+            status_type = system_data.get("status_type", 0)
+            debug.log_info(debug.CAT_SYSTEM, f"Status request: type={status_type}")
+            
+            def send_status_response():
+                try:
+                    # Get system status
+                    current_status = protocol.STATUS_OK
+                    error_code = 0x00
+                    
+                    # Check various system health indicators
+                    uart_health = uart_handler.check_health()
+                    if uart_health["status"] != "HEALTHY":
+                        current_status = protocol.STATUS_ERROR
+                        error_code = 0x01  # UART error
+                    
+                    # Check task manager health
+                    task_stats = task_manager.get_statistics()
+                    if task_stats.get("errors", 0) > 0:
+                        current_status = protocol.STATUS_ERROR
+                        error_code = 0x02  # Task manager error
+                    
+                    status_packet = protocol.create_system_status_packet(current_status, error_code)
+                    uart0.write(status_packet)
+                    debug.log_info(
+                        debug.CAT_SYSTEM,
+                        f"Status response sent: status={current_status:02X}, error={error_code:02X}",
+                    )
+                except Exception as e:
+                    debug.log_error(debug.CAT_SYSTEM, f"Status response failed: {e}")
+
+            task_manager.submit_task(
+                "STATUS_RESPONSE", send_status_response, priority=task_manager.PRIORITY_HIGH
+            )
+
+        elif system_data["command"] == "config_get":
+            parameter = system_data.get("parameter", 0)
+            debug.log_info(debug.CAT_SYSTEM, f"Config get request: parameter={parameter}")
+            
+            def send_config_response():
+                try:
+                    value = 0x00
+                    
+                    if parameter == protocol.CONFIG_DEBUG_LEVEL:
+                        value = debug.level
+                    elif parameter == protocol.CONFIG_ACK_REQUIRED:
+                        value = 0x01  # ACK always required
+                    elif parameter == protocol.CONFIG_HEARTBEAT_INTERVAL:
+                        value = 10  # 10 seconds
+                    elif parameter == protocol.CONFIG_BUFFER_SIZE:
+                        value = 64  # Buffer size
+                    
+                    config_packet = protocol.create_system_config_response_packet(parameter, value)
+                    uart0.write(config_packet)
+                    debug.log_info(
+                        debug.CAT_SYSTEM,
+                        f"Config response sent: param={parameter}, value={value}",
+                    )
+                except Exception as e:
+                    debug.log_error(debug.CAT_SYSTEM, f"Config response failed: {e}")
+
+            task_manager.submit_task(
+                "CONFIG_RESPONSE", send_config_response, priority=task_manager.PRIORITY_HIGH
+            )
+
+        elif system_data["command"] == "config_set":
+            parameter = system_data.get("parameter", 0)
+            value = system_data.get("value", 0)
+            debug.log_info(debug.CAT_SYSTEM, f"Config set request: parameter={parameter}, value={value}")
+            
+            def apply_config_change():
+                try:
+                    success = True
+                    
+                    if parameter == protocol.CONFIG_DEBUG_LEVEL:
+                        if 0 <= value <= 3:
+                            debug.set_level(value)
+                            debug.log_info(debug.CAT_SYSTEM, f"Debug level set to {value}")
+                        else:
+                            success = False
+                    elif parameter == protocol.CONFIG_ACK_REQUIRED:
+                        # ACK setting (placeholder - always enabled)
+                        debug.log_info(debug.CAT_SYSTEM, f"ACK required setting: {value}")
+                    elif parameter == protocol.CONFIG_HEARTBEAT_INTERVAL:
+                        # Heartbeat interval setting (placeholder)
+                        debug.log_info(debug.CAT_SYSTEM, f"Heartbeat interval: {value} seconds")
+                    else:
+                        success = False
+                    
+                    # Send acknowledgment
+                    status = protocol.STATUS_OK if success else protocol.STATUS_ERROR
+                    ack_packet = protocol.create_system_status_packet(status, 0x00)
+                    uart0.write(ack_packet)
+                    
+                except Exception as e:
+                    debug.log_error(debug.CAT_SYSTEM, f"Config set failed: {e}")
+
+            task_manager.submit_task(
+                "CONFIG_SET", apply_config_change, priority=task_manager.PRIORITY_HIGH
+            )
+
+        elif system_data["command"] == "sync_request":
+            mode = system_data.get("mode", 0)
+            debug.log_info(debug.CAT_SYSTEM, f"Sync request: mode={mode}")
+            
+            def send_sync_response():
+                try:
+                    # Get current timestamp (seconds since boot)
+                    current_time = utime.ticks_ms() // 1000
+                    timestamp_low = current_time & 0xFF
+                    timestamp_high = (current_time >> 8) & 0xFF
+                    
+                    sync_packet = protocol.create_system_sync_response_packet(0x01, timestamp_high)
+                    uart0.write(sync_packet)
+                    debug.log_info(
+                        debug.CAT_SYSTEM,
+                        f"Sync response sent: timestamp={current_time}",
+                    )
+                except Exception as e:
+                    debug.log_error(debug.CAT_SYSTEM, f"Sync response failed: {e}")
+
+            task_manager.submit_task(
+                "SYNC_RESPONSE", send_sync_response, priority=task_manager.PRIORITY_HIGH
+            )
+
+        elif system_data["command"] == "capabilities_request":
+            debug.log_info(debug.CAT_SYSTEM, "Capabilities request received")
+            
+            def send_capabilities_response():
+                try:
+                    # Define capability flags
+                    capabilities = (
+                        0x01 |  # Button support
+                        0x02 |  # LED support
+                        0x04 |  # Power management
+                        0x08 |  # Display support
+                        0x10 |  # Debug interface
+                        0x20 |  # System commands
+                        0x40    # Extended commands
+                    )
+                    
+                    cap_low = capabilities & 0xFF
+                    cap_high = (capabilities >> 8) & 0xFF
+                    
+                    cap_packet = protocol.create_system_capabilities_packet(cap_low, cap_high)
+                    uart0.write(cap_packet)
+                    debug.log_info(
+                        debug.CAT_SYSTEM,
+                        f"Capabilities response sent: {capabilities:04X}",
+                    )
+                except Exception as e:
+                    debug.log_error(debug.CAT_SYSTEM, f"Capabilities response failed: {e}")
+
+            task_manager.submit_task(
+                "CAPABILITIES_RESPONSE", send_capabilities_response, priority=task_manager.PRIORITY_HIGH
+            )
+
+        elif system_data["command"] == "extended":
+            ext_command = system_data.get("ext_command", 0)
+            ext_data = system_data.get("ext_data", 0)
+            debug.log_info(debug.CAT_SYSTEM, f"Extended system command: {ext_command:02X}, data={ext_data:02X}")
+            
+            # Forward to extended command handler
+            extended_packet = protocol.create_extended_packet(ext_command, ext_data, 0x00)
+            process_extended_packet(extended_packet)
+
+        else:
+            debug.log_warning(debug.CAT_SYSTEM, f"Unknown system command: {system_data}")
+
+
+def process_extended_packet(packet_data):
+    """Process extended command packet"""
+    valid, extended_data = protocol.parse_extended_packet(packet_data)
+    if valid:
+        debug.log_verbose(debug.CAT_SYSTEM, f"Extended command: {extended_data}")
+
+        if extended_data["command"] == "capabilities_request":
+            def send_ext_capabilities_response():
+                try:
+                    # Extended capabilities version and features
+                    version = 0x01  # Extended protocol version 1
+                    features = (
+                        0x01 |  # Basic extended support
+                        0x02 |  # Sensor interface
+                        0x04    # Actuator interface
+                    )
+                    
+                    cap_packet = protocol.create_extended_capabilities_packet(version, features)
+                    uart0.write(cap_packet)
+                    debug.log_info(
+                        debug.CAT_SYSTEM,
+                        f"Extended capabilities sent: v{version}, features={features:02X}",
+                    )
+                except Exception as e:
+                    debug.log_error(debug.CAT_SYSTEM, f"Extended capabilities failed: {e}")
+
+            task_manager.submit_task(
+                "EXT_CAPABILITIES", send_ext_capabilities_response, priority=task_manager.PRIORITY_HIGH
+            )
+
+        elif extended_data["command"] == "sensor_request":
+            sensor_id = extended_data.get("sensor_id", 0)
+            debug.log_info(debug.CAT_SYSTEM, f"Sensor request: ID={sensor_id}")
+            
+            def send_sensor_data():
+                try:
+                    # Mock sensor data based on sensor ID
+                    sensor_value = 0x00
+                    
+                    if sensor_id == 0x00:  # Temperature sensor
+                        sensor_value = 25  # 25°C
+                    elif sensor_id == 0x01:  # Light sensor
+                        sensor_value = 128  # 50% light level
+                    elif sensor_id == 0x02:  # Accelerometer
+                        sensor_value = 64  # Some acceleration value
+                    else:
+                        sensor_value = 0xFF  # Unknown sensor
+                    
+                    sensor_packet = protocol.create_extended_sensor_packet(sensor_id, sensor_value)
+                    uart0.write(sensor_packet)
+                    debug.log_info(
+                        debug.CAT_SYSTEM,
+                        f"Sensor data sent: ID={sensor_id}, value={sensor_value}",
+                    )
+                except Exception as e:
+                    debug.log_error(debug.CAT_SYSTEM, f"Sensor data failed: {e}")
+
+            task_manager.submit_task(
+                "SENSOR_DATA", send_sensor_data, priority=task_manager.PRIORITY_NORMAL
+            )
+
+        elif extended_data["command"] == "actuator_control":
+            actuator_id = extended_data.get("actuator_id", 0)
+            value = extended_data.get("value", 0)
+            debug.log_info(debug.CAT_SYSTEM, f"Actuator control: ID={actuator_id}, value={value}")
+            
+            def control_actuator():
+                try:
+                    # Mock actuator control
+                    success = True
+                    
+                    if actuator_id == 0x00:  # Motor control
+                        debug.log_info(debug.CAT_SYSTEM, f"Motor speed set to {value}")
+                    elif actuator_id == 0x01:  # Servo control
+                        debug.log_info(debug.CAT_SYSTEM, f"Servo position set to {value}")
+                    elif actuator_id == 0x02:  # Relay control
+                        debug.log_info(debug.CAT_SYSTEM, f"Relay {'ON' if value > 128 else 'OFF'}")
+                    else:
+                        success = False
+                    
+                    # Send acknowledgment
+                    status = 0x01 if success else 0xFF
+                    ack_packet = protocol.create_extended_actuator_ack_packet(actuator_id, status)
+                    uart0.write(ack_packet)
+                    
+                except Exception as e:
+                    debug.log_error(debug.CAT_SYSTEM, f"Actuator control failed: {e}")
+
+            task_manager.submit_task(
+                "ACTUATOR_CONTROL", control_actuator, priority=task_manager.PRIORITY_NORMAL
+            )
+
+        elif extended_data["command"] in ["network", "storage", "crypto", "audio", "video"]:
+            # Placeholder implementations for future features
+            command_type = extended_data["command"]
+            debug.log_info(debug.CAT_SYSTEM, f"Extended {command_type} command (placeholder)")
+            
+            def send_not_implemented():
+                try:
+                    # Send "not implemented" response
+                    status_packet = protocol.create_system_status_packet(protocol.STATUS_ERROR, 0xFF)
+                    uart0.write(status_packet)
+                    debug.log_info(debug.CAT_SYSTEM, f"{command_type} command not implemented")
+                except Exception as e:
+                    debug.log_error(debug.CAT_SYSTEM, f"{command_type} response failed: {e}")
+
+            task_manager.submit_task(
+                f"{command_type.upper()}_NOT_IMPL", send_not_implemented, priority=task_manager.PRIORITY_LOW
+            )
+
+        elif extended_data["command"] == "vendor":
+            vendor_cmd = extended_data.get("vendor_cmd", 0)
+            vendor_data = extended_data.get("vendor_data", 0)
+            debug.log_info(debug.CAT_SYSTEM, f"Vendor command: {vendor_cmd:02X}, data={vendor_data:02X}")
+            
+            # Vendor-specific implementation placeholder
+            def handle_vendor_command():
+                try:
+                    # Echo back vendor command as acknowledgment
+                    vendor_packet = protocol.create_extended_packet(protocol.EXT_VENDOR, vendor_cmd | 0x80, vendor_data)
+                    uart0.write(vendor_packet)
+                    debug.log_info(debug.CAT_SYSTEM, "Vendor command acknowledged")
+                except Exception as e:
+                    debug.log_error(debug.CAT_SYSTEM, f"Vendor command failed: {e}")
+
+            task_manager.submit_task(
+                "VENDOR_COMMAND", handle_vendor_command, priority=task_manager.PRIORITY_NORMAL
+            )
+
+        elif extended_data["command"] == "experimental":
+            exp_cmd = extended_data.get("exp_cmd", 0)
+            exp_data = extended_data.get("exp_data", 0)
+            debug.log_info(debug.CAT_SYSTEM, f"Experimental command: {exp_cmd:02X}, data={exp_data:02X}")
+            
+            # Experimental features placeholder
+            def handle_experimental():
+                try:
+                    # Echo experimental command
+                    exp_packet = protocol.create_extended_packet(protocol.EXT_EXPERIMENTAL, exp_cmd | 0x80, exp_data)
+                    uart0.write(exp_packet)
+                    debug.log_info(debug.CAT_SYSTEM, "Experimental command processed")
+                except Exception as e:
+                    debug.log_error(debug.CAT_SYSTEM, f"Experimental command failed: {e}")
+
+            task_manager.submit_task(
+                "EXPERIMENTAL", handle_experimental, priority=task_manager.PRIORITY_LOW
+            )
+
+        else:
+            debug.log_warning(debug.CAT_SYSTEM, f"Unknown extended command: {extended_data}")
 
 
 def process_display_packet(packet_data):
@@ -416,6 +781,11 @@ def process_uart_packet(packet_data):
             debug.CAT_SYSTEM, f"Processing SYSTEM packet: {packet_data.hex()}"
         )
         process_system_packet(packet_data)
+    elif packet_type == protocol.TYPE_EXTENDED:
+        debug.log_info(
+            debug.CAT_SYSTEM, f"Processing EXTENDED packet: {packet_data.hex()}"
+        )
+        process_extended_packet(packet_data)
     else:
         debug.log_info(
             debug.CAT_UART,

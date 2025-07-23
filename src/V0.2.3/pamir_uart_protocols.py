@@ -53,12 +53,48 @@ class PamirUartProtocols:
     POWER_CMD_TEMP = 0x12  # Temperature reporting
     POWER_CMD_VOLTAGE = 0x13  # Voltage reporting
     POWER_CMD_REQUEST_METRICS = 0x1F  # Request all metrics
+    POWER_CMD_METRICS_COMPLETE = 0x1E  # All metrics sent indicator
 
     # Power states
     POWER_STATE_OFF = 0x00  # System off
     POWER_STATE_RUNNING = 0x01  # System running
     POWER_STATE_SUSPEND = 0x02  # System suspended
     POWER_STATE_SLEEP = 0x03  # Low power sleep
+
+    # System command constants
+    SYSTEM_PING = 0x00
+    SYSTEM_PONG = 0x01
+    SYSTEM_VERSION = 0x02
+    SYSTEM_RESET = 0x03
+    SYSTEM_STATUS = 0x04
+    SYSTEM_CONFIG = 0x05
+    SYSTEM_SYNC = 0x06
+    SYSTEM_CAPABILITIES = 0x07
+    SYSTEM_EXTENDED = 0x1F
+
+    # Extended command constants  
+    EXT_CAPABILITIES = 0x00
+    EXT_SENSOR = 0x01
+    EXT_ACTUATOR = 0x02
+    EXT_NETWORK = 0x03
+    EXT_STORAGE = 0x04
+    EXT_CRYPTO = 0x05
+    EXT_AUDIO = 0x06
+    EXT_VIDEO = 0x07
+    EXT_VENDOR = 0x1E
+    EXT_EXPERIMENTAL = 0x1F
+
+    # System status codes
+    STATUS_OK = 0x01
+    STATUS_ERROR = 0x02
+    STATUS_BUSY = 0x03
+    STATUS_UNKNOWN = 0xFF
+
+    # Configuration parameters
+    CONFIG_DEBUG_LEVEL = 0x01
+    CONFIG_ACK_REQUIRED = 0x02
+    CONFIG_HEARTBEAT_INTERVAL = 0x03
+    CONFIG_BUFFER_SIZE = 0x04
 
     def __init__(self):
         pass
@@ -403,6 +439,11 @@ class PamirUartProtocols:
 
         return self.create_packet(type_flags, data0, data1)
 
+    def create_power_metrics_complete_packet(self):
+        """Create power metrics complete notification packet"""
+        type_flags = self.TYPE_POWER | self.POWER_CMD_METRICS_COMPLETE
+        return self.create_packet(type_flags, 0x00, 0x00)
+
     def create_power_status_packet_rp2040_to_som(self, power_state, status_flags=0x00):
         """Create power status packet FROM RP2040 TO SoM (Raspberry Pi 5)
 
@@ -498,6 +539,13 @@ class PamirUartProtocols:
                 "metric_type": metric_names.get(command, "unknown"),
                 "value": value_16bit,
             }
+        elif command == self.POWER_CMD_METRICS_COMPLETE:
+            # All metrics sent notification (RP2040 → SoM)
+            power_data = {
+                "command": "metrics_complete",
+                "total_metrics": data0,
+                "checksum": data1,
+            }
         else:
             # Unknown power command
             power_data = {
@@ -525,6 +573,28 @@ class PamirUartProtocols:
         return type_flags & 0xE0
 
     # ==================== SYSTEM COMMANDS PROTOCOL ====================
+
+    # ==================== ENHANCED SYSTEM COMMANDS PROTOCOL ====================
+
+    def create_system_status_packet(self, status_code=0x01, error_code=0x00):
+        """Create system status response packet"""
+        type_flags = self.TYPE_SYSTEM | self.SYSTEM_STATUS
+        return self.create_packet(type_flags, status_code, error_code)
+
+    def create_system_config_response_packet(self, config_param, value):
+        """Create system config response packet"""
+        type_flags = self.TYPE_SYSTEM | self.SYSTEM_CONFIG
+        return self.create_packet(type_flags, value, config_param)
+
+    def create_system_sync_response_packet(self, sync_status=0x01, timestamp_high=0x00):
+        """Create system sync response packet"""
+        type_flags = self.TYPE_SYSTEM | self.SYSTEM_SYNC
+        return self.create_packet(type_flags, sync_status, timestamp_high)
+
+    def create_system_capabilities_packet(self, capability_mask_low, capability_mask_high):
+        """Create system capabilities response packet"""
+        type_flags = self.TYPE_SYSTEM | self.SYSTEM_CAPABILITIES
+        return self.create_packet(type_flags, capability_mask_low, capability_mask_high)
 
     def create_system_ping_packet(self):
         """Create system ping packet FROM RP2040 TO SoM
@@ -578,18 +648,56 @@ class PamirUartProtocols:
         # Extract system command from full type_flags
         command = type_flags & 0x1F
 
-        if command == 0x00:
+        if command == self.SYSTEM_PING:
             # Ping command
-            system_data = {"command": "ping"}
-        elif command == 0x01:
-            # Pong response
-            system_data = {"command": "pong"}
-        elif command == 0x02:
-            # Version request
-            system_data = {"command": "version_request"}
-        elif command == 0x03:
+            system_data = {"command": "ping", "ping_id": data0, "flags": data1}
+        elif command == self.SYSTEM_PONG:
+            # Pong response (should be handled as ping response)
+            system_data = {"command": "pong", "ping_id": data0, "flags": data1}
+        elif command == self.SYSTEM_VERSION:
+            # Version request/response
+            if data0 == 0x00 and data1 == 0x00:
+                system_data = {"command": "version_request"}
+            else:
+                system_data = {
+                    "command": "version_response",
+                    "major": data0,
+                    "minor_patch": data1
+                }
+        elif command == self.SYSTEM_RESET:
             # Reset command
-            system_data = {"command": "reset", "reset_type": data0}
+            system_data = {"command": "reset", "reset_type": data0, "reason": data1}
+        elif command == self.SYSTEM_STATUS:
+            # Status command
+            if data0 == 0x00:
+                system_data = {"command": "status_request", "status_type": data1}
+            else:
+                system_data = {"command": "status_response", "status": data0, "error": data1}
+        elif command == self.SYSTEM_CONFIG:
+            # Configuration command
+            if data0 == 0x00:
+                system_data = {"command": "config_get", "parameter": data1}
+            elif data0 == 0x01:
+                system_data = {"command": "config_set", "parameter": data1 >> 4, "value": data1 & 0x0F}
+            else:
+                system_data = {"command": "config_response", "value": data0, "parameter": data1}
+        elif command == self.SYSTEM_SYNC:
+            # Time synchronization
+            if data0 == 0x00:
+                system_data = {"command": "sync_request", "mode": data1}
+            else:
+                timestamp = data0 | (data1 << 8)
+                system_data = {"command": "sync_response", "status": data0, "timestamp": timestamp}
+        elif command == self.SYSTEM_CAPABILITIES:
+            # Capabilities query/response
+            if data0 == 0x00 and data1 == 0x00:
+                system_data = {"command": "capabilities_request"}
+            else:
+                capabilities = data0 | (data1 << 8)
+                system_data = {"command": "capabilities_response", "capabilities": capabilities}
+        elif command == self.SYSTEM_EXTENDED:
+            # Extended system command
+            system_data = {"command": "extended", "ext_command": data0, "ext_data": data1}
         else:
             # Unknown system command
             system_data = {
@@ -600,6 +708,97 @@ class PamirUartProtocols:
             }
 
         return True, system_data
+
+    # ==================== EXTENDED COMMANDS PROTOCOL ====================
+
+    def create_extended_packet(self, ext_command, data0=0x00, data1=0x00):
+        """Create extended command packet"""
+        type_flags = self.TYPE_EXTENDED | (ext_command & 0x1F)
+        return self.create_packet(type_flags, data0, data1)
+
+    def create_extended_capabilities_packet(self, version=0x01, features=0x00):
+        """Create extended capabilities response packet"""
+        return self.create_extended_packet(self.EXT_CAPABILITIES, version, features)
+
+    def create_extended_sensor_packet(self, sensor_id, sensor_value):
+        """Create extended sensor data packet"""
+        return self.create_extended_packet(self.EXT_SENSOR, sensor_id, sensor_value)
+
+    def create_extended_actuator_ack_packet(self, actuator_id, status):
+        """Create extended actuator acknowledgment packet"""
+        return self.create_extended_packet(self.EXT_ACTUATOR, actuator_id, status)
+
+    def parse_extended_packet(self, packet_bytes):
+        """Parse extended command packet
+
+        Args:
+            packet_bytes: 4-byte packet from UART
+
+        Returns:
+            tuple: (valid, extended_data) where extended_data contains command info
+        """
+        valid, parsed = self.validate_packet(packet_bytes)
+        if not valid:
+            return False, None
+
+        type_flags, data0, data1, checksum = parsed
+
+        # Check if this is an extended packet
+        if (type_flags & 0xE0) != 0xE0:
+            return False, None
+
+        # Extract extended command
+        ext_command = type_flags & 0x1F
+
+        if ext_command == self.EXT_CAPABILITIES:
+            # Extended capabilities
+            if data0 == 0x00 and data1 == 0x00:
+                extended_data = {"command": "capabilities_request"}
+            else:
+                extended_data = {"command": "capabilities_response", "version": data0, "features": data1}
+        elif ext_command == self.EXT_SENSOR:
+            # Sensor operations
+            if data1 == 0xFF:
+                extended_data = {"command": "sensor_request", "sensor_id": data0}
+            else:
+                extended_data = {"command": "sensor_data", "sensor_id": data0, "value": data1}
+        elif ext_command == self.EXT_ACTUATOR:
+            # Actuator operations
+            if data1 == 0x00:
+                extended_data = {"command": "actuator_query", "actuator_id": data0}
+            else:
+                extended_data = {"command": "actuator_control", "actuator_id": data0, "value": data1}
+        elif ext_command == self.EXT_NETWORK:
+            # Network interface (placeholder)
+            extended_data = {"command": "network", "operation": data0, "parameter": data1}
+        elif ext_command == self.EXT_STORAGE:
+            # Storage management (placeholder)
+            extended_data = {"command": "storage", "operation": data0, "address": data1}
+        elif ext_command == self.EXT_CRYPTO:
+            # Cryptographic operations (placeholder)
+            extended_data = {"command": "crypto", "operation": data0, "key_id": data1}
+        elif ext_command == self.EXT_AUDIO:
+            # Audio interface (placeholder)
+            extended_data = {"command": "audio", "operation": data0, "parameter": data1}
+        elif ext_command == self.EXT_VIDEO:
+            # Video interface (placeholder)
+            extended_data = {"command": "video", "operation": data0, "parameter": data1}
+        elif ext_command == self.EXT_VENDOR:
+            # Vendor-specific extensions
+            extended_data = {"command": "vendor", "vendor_cmd": data0, "vendor_data": data1}
+        elif ext_command == self.EXT_EXPERIMENTAL:
+            # Experimental features
+            extended_data = {"command": "experimental", "exp_cmd": data0, "exp_data": data1}
+        else:
+            # Unknown extended command
+            extended_data = {
+                "command": "unknown_extended",
+                "raw_command": ext_command,
+                "data0": data0,
+                "data1": data1,
+            }
+
+        return True, extended_data
 
     # ==================== DISPLAY CONTROL PROTOCOL ====================
 
